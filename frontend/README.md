@@ -1,5 +1,7 @@
 # 🖥️ Enterprise-RAG-V2 Decoupled Console Frontend (`frontend/`)
 
+[← Back to main README](../README.md)
+
 A high-performance single-page web console (React 18 + TypeScript + Vite) providing real-time Server-Sent Events (SSE) chat token streaming, timing telemetry, infrastructure SLA diagnostic grids, dynamic IP masking, profile configuration management, and RAGAS quality evaluation dashboards.
 
 ---
