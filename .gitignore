@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual Environment
+.venv/
+venv/
+
+# Environment Variables & Secrets
+.env
+.enc_key
+model_profiles.enc
+tenant_registry.json
+app_data/
+
+# Temporary / Scratch Files
+~$*
+scratch/
+new_states.txt
+original_states.txt
+
+# macOS
+.DS_Store
+
+# AI Generated Data
+embedding_cache/
+qdrant_storage/
+sample_data/
+uploads/
+
+# Logs
+*.log
+
+# VS Code
+.vscode/
+
+# Run state database
+eval_runs.json

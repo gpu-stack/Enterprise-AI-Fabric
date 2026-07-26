@@ -1,0 +1,39 @@
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: enterprise-rag-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - llm-infra-net
+
+  celery_worker:
+    image: enterprise-rag-app-v2:latest
+    container_name: enterprise-rag-celery
+    # Override the default uvicorn entrypoint in the base image
+    entrypoint: [""]
+    # Mount the local codebase over the container's /app so it picks up the latest Python changes
+    # Install celery & redis on the fly since they might not be baked into the existing image yet
+    command: >
+      bash -c "pip install celery redis && celery -A src.processing.tasks.celery worker --loglevel=info"
+    working_dir: /app
+    env_file:
+      - .env.docker
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./:/app
+      - ./app_data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - llm-infra-net
+
+networks:
+  llm-infra-net:
+    name: llm-infra-net
