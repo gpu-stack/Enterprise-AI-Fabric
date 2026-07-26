@@ -1,5 +1,7 @@
 # 📊 RAGAS Quality Evaluation & Gating Engine (`src/evaluation/`)
 
+[← Back to main README](../../README.md)
+
 The **Evaluation & Quality Gating Module** (`rag_evaluator.py`) provides automated testing, synthetic test dataset generation, and multi-tier quality gate validation for **Enterprise-RAG-V2** using the **RAGAS (Retrieval Augmented Generation Assessment)** framework.
 
 ---
