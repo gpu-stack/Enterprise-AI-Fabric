@@ -1,5 +1,7 @@
 # 🗄️ Database, Vector Storage & Encryption Engine (`src/database/`)
 
+[← Back to main README](../../README.md)
+
 The **Database & Storage Module** manages high-performance vector persistence, logical multi-tenant partitioning in Qdrant, query payload filtering, and symmetric AES-128 credential encryption.
 
 ---
