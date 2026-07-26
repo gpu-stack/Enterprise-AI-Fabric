@@ -1,5 +1,7 @@
 # 🧠 Generation, Retrieval & LLM Orchestration Service (`src/generation/`)
 
+[← Back to main README](../../README.md)
+
 The **Generation & Retrieval Module** (`orchestrator.py`) is the central intelligence engine of **Enterprise-RAG-V2**. It orchestrates query vectorization, Qdrant payload-filtered retrieval, TEI Cross-Encoder reranking, dynamic vLLM LoRA adapter fallback routing, vendor-neutral prompt formatting, and Server-Sent Events (SSE) token streaming with microsecond latency telemetry.
 
 ---
