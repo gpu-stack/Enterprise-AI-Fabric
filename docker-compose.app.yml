@@ -1,9 +1,15 @@
-version: '3.8'
-
 networks:
   rag_network:
     driver: bridge
     name: enterprise_rag_network
+
+volumes:
+  app_data:
+    name: enterprise_rag_app_data
+  app_uploads:
+    name: enterprise_rag_app_uploads
+  app_cache:
+    name: enterprise_rag_app_cache
 
 services:
   # -------------------------------------------------------------------
@@ -35,16 +41,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.app
-    image: enterprise-ai-fabric:latest
+    image: ${IMAGE_NAME:-enterprise-ai-fabric:latest}
     container_name: enterprise_rag_app
     restart: unless-stopped
     ports:
       - "80:80"       # Nginx Frontend UI & API Gateway Reverse Proxy
       - "8000:8000"   # Direct FastAPI REST Port
     volumes:
-      - ./app_data:/app/app_data
-      - ./uploads:/app/data/uploads
-      - ./embedding_cache:/app/embedding_cache
+      - app_data:/app/app_data
+      - app_uploads:/app/data/uploads
+      - app_cache:/app/embedding_cache
     environment:
       - DATA_DIR=/app/app_data
       # --- DECOUPLED AI INFRASTRUCTURE ENDPOINTS ---
@@ -88,14 +94,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.app
-    image: enterprise-ai-fabric:latest
+    image: ${IMAGE_NAME:-enterprise-ai-fabric:latest}
     container_name: enterprise_rag_celery
     restart: unless-stopped
     command: celery -A src.processing.tasks.celery worker --loglevel=info --concurrency=4
     volumes:
-      - ./app_data:/app/app_data
-      - ./uploads:/app/data/uploads
-      - ./embedding_cache:/app/embedding_cache
+      - app_data:/app/app_data
+      - app_uploads:/app/data/uploads
+      - app_cache:/app/embedding_cache
     environment:
       - DATA_DIR=/app/app_data
       # --- DECOUPLED AI INFRASTRUCTURE ENDPOINTS ---
@@ -126,7 +132,7 @@ services:
       interval: 20s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 10s
     depends_on:
       redis:
         condition: service_healthy
