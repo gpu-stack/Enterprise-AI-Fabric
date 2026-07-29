@@ -97,7 +97,7 @@ services:
     image: ${IMAGE_NAME:-sandyappdev/enterprise-ai-fabric:latest}
     container_name: enterprise_rag_celery
     restart: unless-stopped
-    command: celery -A src.processing.tasks.celery worker --loglevel=info --concurrency=4
+    entrypoint: ["celery", "-A", "src.processing.tasks.celery", "worker", "--loglevel=info", "--concurrency=4"]
     volumes:
       - app_data:/app/app_data
       - app_uploads:/app/data/uploads
