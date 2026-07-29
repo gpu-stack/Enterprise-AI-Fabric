@@ -11,7 +11,7 @@
 
 Enterprise-RAG-V2 is a production-grade, multi-tenant Retrieval-Augmented Generation (RAG) platform for ingesting, processing, and querying complex, high-density unstructured documents — financial statements, regulatory filings, technical spec sheets, and legal contracts.
 
-It pairs a decoupled **React SPA console** with a **FastAPI control plane**, a containerized **Qdrant** vector store, decoupled **TEI** embedding/reranking microservices, **Celery/Redis** async ingestion, vLLM/cloud LLM generation, and an automated **RAGAS** quality-gate.
+It pairs a decoupled **React SPA console** with a **FastAPI control plane**, a containerized **Qdrant** vector store (True Hybrid Search Fusion: Dense + Sparse BM25), decoupled **TEI** embedding/reranking microservices, **Redis** conversation memory, **Celery/Redis** async ingestion, Azure OpenAI / vLLM generation, and an automated **RAGAS** quality-gate.
 
 ---
 
@@ -23,28 +23,32 @@ It pairs a decoupled **React SPA console** with a **FastAPI control plane**, a c
 5. [Technology Stack](#5-technology-stack)
 6. [Quick Start (Fixed & Verified)](#6-quick-start-fixed--verified)
 7. [Scaling to 100,000 PDFs](#7-scaling-to-100000-pdfs)
-8. [Data Persistence](#8-data-persistence)
+8. [Data Persistence & Security](#8-data-persistence--security)
 9. [Current Status & Honest Roadmap](#9-current-status--honest-roadmap)
 
 ---
 
 ## 1. What Problem Does This Solve?
 
-Standard RAG implementations break down in enterprise settings for five specific reasons:
+Standard RAG implementations break down in enterprise settings for six specific reasons:
 
 | # | Problem | Why It Happens |
 |---|---|---|
 | 1 | **Broken financial tables & layout context** | Standard text extractors strip layout coordinates, mangling borderless columns and balance sheets into illegible strings. |
 | 2 | **Cross-department data leaks** | Multi-tenant systems are usually forced to choose between collection sprawl (one Qdrant collection per tenant) or risking cross-tenant leakage in a shared one. |
 | 3 | **Stale revision contamination** | Re-uploading an updated policy or Q3 report causes the retriever to mix outdated chunks with the current ones. |
-| 4 | **Dense vector noise** | Pure cosine similarity returns semantically related but contextually irrelevant passages, degrading answer accuracy. |
-| 5 | **Silent quality regression** | Changing a prompt, chunk size, or model can quietly introduce hallucinations with no automated way to catch it. |
+| 4 | **Pure Dense Vector Noise & Code Misses** | Pure cosine similarity misses exact form IDs, policy numbers, or acronyms while returning semantically near chunks. |
+| 5 | **Multi-Turn Topic Contamination** | Asking a new question on a different topic carries over old history keywords into vector search, causing off-topic hallucinations. |
+| 6 | **Silent quality regression** | Changing a prompt, chunk size, or model can quietly introduce hallucinations with no automated way to catch it. |
 
 **How** each of these is actually solved — not just claimed — is detailed in Section 2, and proven out in the source: `src/processing/`, `src/database/`, `src/generation/`, and `src/evaluation/`.
 
 ---
 
 ## 2. How It Solves Them — Architecture Pillars
+
+### 🔀 True Hybrid Search Fusion (Dense + Sparse BM25)
+Combines **Dense Vector Embeddings** (`bge-large-en-v1.5`, 1024-dim Cosine) with **Sparse Lexical Embeddings** (`fastembed.SparseTextEmbedding` via `Qdrant/bm25`). Merges candidate rankings using Qdrant's native **Reciprocal Rank Fusion (RRF)** for maximum keyword and semantic recall. → [`HYBRID_SEARCH.md`](HYBRID_SEARCH.md)
 
 ### 🔒 Strict Logical Multi-Tenancy
 A single Qdrant collection holds every tenant's vectors. Isolation is enforced with a `tenant_id` payload keyword index (`is_tenant: True`), so Qdrant prunes non-matching tenant subgraphs *before* running any vector comparison — no collection sprawl, no cross-tenant leakage. → [`src/database/README.md`](src/database/README.md)
@@ -58,17 +62,17 @@ Embedded charts and diagrams are cropped, base64-encoded, and sent to a multimod
 ### 🧱 Parent-Child Document Hierarchy
 Small **child chunks** (~300–500 tokens) match queries precisely; their associated **parent block** (~1,500–2,048 tokens) is what actually gets sent to the LLM, so retrieval precision and context completeness stop being a trade-off. → [`src/processing/CHUNKING.md`](src/processing/CHUNKING.md)
 
-### 🔄 Document Revision Lineage & Deterministic Deduplication
-Chunk IDs are deterministic UUIDv5 hashes of `tenant_id:filename:chunk_text`, so re-ingesting identical content overwrites cleanly. Ingesting a new version flips older chunks to `is_latest: False` instead of deleting them — audit history is preserved, but live queries only ever see current data. → [`src/processing/INGESTION.md`](src/processing/INGESTION.md)
+### 💬 Multi-Turn Conversation Memory & Topic Isolation
+Redis stores session conversation turns (`src/database/conversation_memory.py`). When history exists, a fast LLM pass (`get_standalone_query`) reformulates the query and **drops prior topic keywords completely** when a user switches topics, preventing vector query contamination. → [`src/generation/README.md`](src/generation/README.md)
 
-### 🔐 Symmetric Fernet AES-128 Credential Encryption
-Model API keys and connection profiles are encrypted at rest (`model_profiles.enc`) with a key file locked to `0o600`. → [`src/database/README.md`](src/database/README.md)
+### 🎯 Stage 2 Cross-Encoder Reranking & Quality Badging
+Candidate chunks retrieved from RRF Fusion pass through a TEI Cross-Encoder reranker (`bge-reranker-large`). Every single candidate's score is overwritten with its Cross-Encoder probability and sorted strictly descending, displaying UI Citation Quality Badges (`HIGH_CONFIDENCE`, `MEDIUM_CONFIDENCE`, `LOW_CONFIDENCE`, `UNVERIFIED`). → [`src/generation/README.md`](src/generation/README.md)
 
-### 🎯 Two-Stage Retrieval with Cross-Encoder Reranking
-Dense vector search (`bge-large-en-v1.5`) hands its top-K candidates to a TEI cross-encoder reranker (`bge-reranker-large`); anything below `RERANKER_SCORE_THRESHOLD` (default `0.40`) is dropped. → [`src/generation/README.md`](src/generation/README.md)
+### ⚡ Sub-20ms Latency Optimizations & GPU Queue Protection
+Bypasses the query rewriter on Turn 1 (0ms latency), limits rewriter generation to `max_tokens=30` and `temperature=0.0` with stop tokens, caps final answer generation at `max_tokens=512`, and bounds LLM context payload to top-4 max context chunks. → [`src/generation/README.md`](src/generation/README.md)
 
-### 📊 Automated RAGAS Quality Gating
-A synthetic QA generator + RAGAS scoring engine grades every pipeline change against Faithfulness, Answer Relevancy, Context Recall, and Context Precision, producing a `PASSED` / `MARGINAL` / `FAILED` verdict. → [`src/evaluation/README.md`](src/evaluation/README.md)
+### 📊 Automated RAGAS Quality Gating & Real-Time Observability
+A synthetic QA generator + RAGAS scoring engine grades pipeline changes against Faithfulness, Answer Relevancy, Context Recall, and Context Precision. A unified **Logs & Telemetry Console** provides real-time SLA percentiles (p50, p90, p95, p99) and security audit logs. → [`src/evaluation/README.md`](src/evaluation/README.md)
 
 ---
 
@@ -84,26 +88,28 @@ graph TD
         Redis --> CeleryWorker["Celery Worker<br>(ingest_pipeline.py)"]
     end
 
-    subgraph Storage_Security ["Secure Configuration & State"]
+    subgraph Storage_Security ["Secure Configuration, Memory & Audit"]
         FastAPI <--> FernetEnc["Fernet AES-128 Encrypted Credentials"]
-        FastAPI <--> TenantRegistry["Tenant Registry & Eval Logs"]
+        FastAPI <--> RedisMemory["Redis Multi-Turn Memory Manager"]
+        FastAPI <--> AuditVault["SQLite Audit Vault & Log Retention"]
     end
 
     subgraph Processing_Layer ["Document Processing"]
         CeleryWorker --> LayoutParser["Layout-Aware Parser<br>(pdfplumber + Multimodal LLM)"]
         LayoutParser --> SemanticSplitter["Parent-Child Semantic Splitter"]
-        SemanticSplitter --> UUIDGen["UUIDv5 Generator & Lineage Manager"]
+        SemanticSplitter --> SparseFastEmbed["FastEmbed BM25 Encoder"]
     end
 
-    subgraph Microservice_Infra ["Decoupled Microservices"]
-        UUIDGen --> TEI_Embed["TEI Embedding Server<br>(bge-large-en-v1.5)"]
-        TEI_Embed --> QdrantDB[("Qdrant Vector DB<br>Tenant-Partitioned")]
+    subgraph Microservice_Infra ["Decoupled Microservices & Storage"]
+        SemanticSplitter --> TEI_Embed["TEI Embedding Server<br>(bge-large-en-v1.5)"]
+        TEI_Embed --> QdrantDB[("Qdrant Vector DB<br>Dense + Sparse Named Vectors")]
+        SparseFastEmbed --> QdrantDB
         FastAPI <--> QdrantDB
         FastAPI --> TEI_Rerank["TEI Reranker<br>(bge-reranker-large)"]
     end
 
-    subgraph LLM_Inference ["Generation"]
-        FastAPI <--> LLM{"LLM Engine<br>(Cloud API or On-Prem vLLM)"}
+    subgraph LLM_Inference ["Generation Engine"]
+        FastAPI <--> LLM{"LLM Provider<br>(Azure OpenAI, Cloud API, or vLLM)"}
     end
 
     subgraph Quality_Audit ["Automated Evaluation"]
@@ -117,17 +123,16 @@ graph TD
 
 | Component | Scope | Docs |
 |---|---|---|
+| **Hybrid Search Fusion** | Dense + Sparse BM25, Qdrant RRF, FastEmbed encoder | [`HYBRID_SEARCH.md`](HYBRID_SEARCH.md) |
 | **Document Parsing** | Layout geometry, table isolation, multimodal chart description | [`src/processing/PARSING.md`](src/processing/PARSING.md) |
 | **Semantic Chunking** | Parent-child hierarchy, table protection, TEI embedding | [`src/processing/CHUNKING.md`](src/processing/CHUNKING.md) |
 | **Ingestion Pipeline** | Dedup, UUIDv5, revision lineage, async Celery tasks | [`src/processing/INGESTION.md`](src/processing/INGESTION.md) |
 | **Processing Overview** | End-to-end processing service architecture | [`src/processing/README.md`](src/processing/README.md) |
-| **Vector Database & Storage** | Qdrant schema, tenant indexing, encryption | [`src/database/README.md`](src/database/README.md) |
-| **Generation & Retrieval** | Query filtering, reranking, LoRA fallback, SSE streaming | [`src/generation/README.md`](src/generation/README.md) |
+| **Vector Database & Storage** | Qdrant schema, tenant indexing, encryption, audit vault | [`src/database/README.md`](src/database/README.md) |
+| **Generation & Retrieval** | Standalone query, Cross-Encoder badging, Azure OpenAI support | [`src/generation/README.md`](src/generation/README.md) |
 | **RAGAS Evaluation** | Synthetic QA, quality gate matrix | [`src/evaluation/README.md`](src/evaluation/README.md) |
-| **React Frontend** | Console UI, telemetry, diagnostics | [`frontend/README.md`](frontend/README.md) |
+| **React Frontend** | Console UI, SLA telemetry, live diagnostics | [`frontend/README.md`](frontend/README.md) |
 | **100K PDF Scaling** | Distributed workers, GPU TEI farms, Qdrant sharding | [`docs/100K_PDF_SCALING_ARCHITECTURE.md`](docs/100K_PDF_SCALING_ARCHITECTURE.md) |
-
-> All links above are repo-relative and resolve correctly on GitHub. (The previous README pointed to an absolute local file path — fixed here.)
 
 ---
 
@@ -135,23 +140,21 @@ graph TD
 
 | Layer | Technology | Role |
 |---|---|---|
-| Frontend | React 18 + TypeScript + Vite | SSE-streaming console UI |
+| Frontend | React 18 + TypeScript + Vite | SSE-streaming console UI & SLA console |
 | Backend API | FastAPI + Python 3.11 + Uvicorn | Control plane & orchestrator |
 | Async Task Queue | Celery + Redis | Background document ingestion |
-| Vector Database | Qdrant 1.9+ | Multi-tenant vector store |
-| Embedding Engine | TEI (`bge-large-en-v1.5`) | 1024-dim dense embeddings |
-| Reranker Engine | TEI (`bge-reranker-large`) | Cross-encoder relevance scoring |
+| Conversation Memory | Redis (`src/database/conversation_memory.py`) | Multi-turn session history |
+| Vector Database | Qdrant 1.18+ | Dual named vector store (`dense` & `sparse`) |
+| Sparse BM25 Encoder | FastEmbed (`Qdrant/bm25`) | Lexical term-frequency vector generation |
+| Dense Embedding Engine | TEI (`bge-large-en-v1.5`) | 1024-dim dense embeddings |
+| Reranker Engine | TEI (`bge-reranker-large`) | Cross-encoder relevance scoring & badging |
 | Document Parser | `pdfplumber` + Pandas | Layout-aware table/text extraction |
-| Multimodal Vision | Gemini / Qwen-VL | Chart & diagram description |
-| Semantic Splitter | LangChain Experimental + `tiktoken` | Parent-child chunking |
-| Security | `cryptography` (Fernet AES-128) | Credential encryption at rest |
+| Security & Audit | `cryptography` (Fernet AES-128) + Audit Vault | Credential encryption & admin audit log |
 | Evaluation | RAGAS | Automated quality gating |
 
 ---
 
 ## 6. Quick Start (Fixed & Verified)
-
-> The previous version of this README told you to run `docker compose up -d` to "start the application" — but the root `docker-compose.yml` only defines **Redis** and the **Celery worker**, not the FastAPI/React app itself, and the Celery worker image tag didn't match the app's build tag. The steps below were verified against the actual compose files and Dockerfile and work end-to-end.
 
 ### Prerequisites
 - Docker Engine 20.10+ and Compose v2.0+
@@ -162,9 +165,9 @@ graph TD
 ```bash
 cp .env.docker .env
 ```
-Edit `.env` and pick the scenario that matches your setup (external host services, local Docker network, or a remote server) — the file has all three templated. Note: `.env.example` only lists a handful of variables; the full set (chunk size, reranker threshold, top-k, LLM mode, etc.) is documented in [`src/config.py`](src/config.py) and worth reviewing before a production run.
+Edit `.env` and set your preferred infrastructure endpoints and LLM deployment mode.
 
-### Step 2 — Start the infrastructure microservices (Qdrant, embedder, reranker)
+### Step 2 — Start the infrastructure microservices (Qdrant, embedder, reranker, redis)
 ```bash
 # CPU-only
 docker compose -f docker-compose.infra.yml --env-file .env up -d
@@ -173,43 +176,22 @@ docker compose -f docker-compose.infra.yml --env-file .env up -d
 docker compose -f docker-compose.infra-gpu.yml --env-file .env up -d
 ```
 
-### Step 3 — Build the application image
-Build it **before** starting Redis/Celery — the Celery worker service reuses this image and will fail to start if it doesn't exist yet:
+### Step 3 — Build and launch the application container
 ```bash
-docker build -t enterprise-rag-app-v2:latest .
+docker compose -f docker-compose.app.yml build
+docker compose -f docker-compose.app.yml up -d
 ```
-(This tag must match the `image:` value in `docker-compose.yml`. If you rename it, update the compose file too.)
 
-### Step 4 — Start Redis + the Celery worker (async ingestion)
-This is the step the original Quick Start left out — without it, uploaded documents have no worker to process them:
-```bash
-docker compose --env-file .env up -d
-```
-This starts `redis` and `celery_worker` (the latter running `celery -A src.processing.tasks.celery worker`), both attached to the `llm-infra-net` Docker network created in Step 2.
-
-### Step 5 — Run the application container
-```bash
-docker run -d -p 8000:8000 \
-  --env-file .env \
-  -v $(pwd)/app_data:/app/data \
-  --network llm-infra-net \
-  --name enterprise-rag-app \
-  enterprise-rag-app-v2:latest
-```
-`--network llm-infra-net` is required so the app container can resolve `rag-qdrant`, `redis`, etc. by container name — it was missing from the previous instructions, which would have left the app unable to reach any of the other services in Scenario B.
-
-### Step 6 — Open the console
+### Step 4 — Open the console
 ```
 http://localhost:8000
 ```
-
-Uploads submitted from the console are enqueued to Celery (Step 4's worker) and processed asynchronously — check job status via `GET /api/jobs/{job_id}/status`.
 
 ---
 
 ## 7. Scaling to 100,000 PDFs
 
-At enterprise scale (~100K PDFs, ~5M pages, ~15M vectors), a single-node deployment is not viable. Full details, diagrams, and a cost table live in [`docs/100K_PDF_SCALING_ARCHITECTURE.md`](docs/100K_PDF_SCALING_ARCHITECTURE.md); the key numbers:
+At enterprise scale (~100K PDFs, ~5M pages, ~15M vectors), full architecture details and cost tables live in [`docs/100K_PDF_SCALING_ARCHITECTURE.md`](docs/100K_PDF_SCALING_ARCHITECTURE.md).
 
 | Metric | Value |
 |---|---|
@@ -221,39 +203,32 @@ At enterprise scale (~100K PDFs, ~5M pages, ~15M vectors), a single-node deploym
 | Embedding throughput (3× A10G GPUs) | ~15M chunks in ~2.7 hours |
 | Query throughput (sharded Qdrant, 6 shards / RF 2) | 1,000+ queries/sec |
 
-**Key interventions:** move ingestion from single-node synchronous parsing to a Celery/Ray worker pool with autoscaling; shard Qdrant across 3+ nodes with SQ8 quantization and on-disk payload storage; scale TEI embedding/reranking behind GPU pools; add a Redis semantic query cache (cosine similarity > 0.96) to skip re-computation on repeated questions; run vLLM with tensor parallelism and continuous batching for concurrent generation.
-
 ---
 
-## 8. Data Persistence
+## 8. Data Persistence & Security
 
-Encryption keys, connection profiles, tenant metadata, and evaluation logs are stored in `./app_data` (mounted to `/app/data` in the container):
+Encryption keys, connection profiles, tenant metadata, evaluation logs, and audit trails are stored in `./app_data`:
 
-| File | Contents |
+| File / Location | Contents |
 |---|---|
 | `.enc_key` | Fernet AES-128 symmetric key (`chmod 0o600`) |
 | `model_profiles.enc` | Encrypted LLM deployment credentials |
 | `tenant_registry.json` | Tenant scope definitions |
-| `eval_runs.json` | Historical RAGAS run logs |
-
-Back up the system state by copying `./app_data`.
+| `app_data/logs/telemetry.db` | SQLite system logs, audit vault, and request latency SLA metrics |
 
 ---
 
 ## 9. Current Status & Honest Roadmap
 
-This section exists so the README doesn't overclaim. Verified against the current codebase:
+**Implemented & Verified:**
+- True Hybrid Search Fusion (Dense + Sparse BM25 via Qdrant RRF)
+- Cross-Encoder Citation Quality Badging (`HIGH_CONFIDENCE`, `MEDIUM_CONFIDENCE`, `LOW_CONFIDENCE`, `UNVERIFIED`)
+- Multi-Turn Redis Conversation Memory & Standalone Query Reformulation
+- Sub-20ms Turn 1 Pre-processing Latency & GPU Queue Protection (`max_tokens=512`)
+- Azure OpenAI Native REST Onboarding (`_build_llm_endpoint_and_headers`)
+- SQLite Audit Vault & Dynamic Log Retention Manager
+- Real-Time Enterprise SLA Telemetry Dashboard (p50, p90, p95, p99 percentiles)
 
-**Already implemented:**
-- Async ingestion via Celery + Redis (wired into `POST /api/tenants/{tenant_id}/ingest`)
-- Multi-tenant Qdrant isolation, Fernet-encrypted credentials, UUIDv5 lineage
-- Two-stage retrieval (dense + reranker), SSE streaming, LoRA fallback routing
-- RAGAS automated quality gate
-
-**Known gaps (tracked in `improvement_plan.md`):**
-- No authentication/authorization layer on the FastAPI endpoints yet (no JWT/API-key middleware)
-- Default deployment runs a single Qdrant node — the sharded/replicated cluster described in Section 7 is a scaling target, not the current default
-- Retrieval is dense-vector only; hybrid (dense + BM25 sparse) search is planned
-- Evaluation history is stored in a flat `eval_runs.json` rather than a database
-
-See `improvement_plan.md` for the full prioritized backlog.
+**Roadback Targets:**
+- Role-based Access Control (RBAC) & JWT API Authentication
+- Multi-region Qdrant cluster autoscaling

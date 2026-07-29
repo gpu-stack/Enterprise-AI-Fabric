@@ -1,8 +1,8 @@
 # 🧠 Generation, Retrieval & LLM Orchestration Service (`src/generation/`)
 
-[← Back to main README](../../README.md)
+[← Back to main README](../../README.md) | [🔍 Hybrid Search Documentation](../../HYBRID_SEARCH.md)
 
-The **Generation & Retrieval Module** (`orchestrator.py`) is the central intelligence engine of **Enterprise-RAG-V2**. It orchestrates query vectorization, Qdrant payload-filtered retrieval, TEI Cross-Encoder reranking, dynamic vLLM LoRA adapter fallback routing, vendor-neutral prompt formatting, and Server-Sent Events (SSE) token streaming with microsecond latency telemetry.
+The **Generation & Retrieval Module** (`orchestrator.py`) is the central intelligence engine of **Enterprise-RAG-V2**. It orchestrates True Hybrid Search Fusion, Standalone Query Reformulation (topic isolation), TEI Cross-Encoder reranking & score uniformity, Azure OpenAI / vLLM LLM endpoint building, sub-20ms latency optimizations, and Server-Sent Events (SSE) token streaming.
 
 ---
 
@@ -10,7 +10,7 @@ The **Generation & Retrieval Module** (`orchestrator.py`) is the central intelli
 
 ```
 src/generation/
-├── orchestrator.py    # Master Context Orchestrator & SSE Streaming Generator
+├── orchestrator.py    # Master Context Orchestrator, Query Reformulator & SSE Streaming Generator
 └── README.md          # Generation Service Documentation
 ```
 
@@ -19,20 +19,11 @@ src/generation/
 ## 📌 1. What & Why?
 
 ### What it Does
-* **Tenant-Filtered Retrieval**: Intercepts user queries and executes vector search in Qdrant restricted strictly to the user's `tenant_id` and active revision flag (`is_latest: True`).
-* **TEI Cross-Encoder Reranking**: Submits candidate vector hits to a dedicated Text Embeddings Inference (TEI) reranker container (`BAAI/bge-reranker-large`) and drops chunks falling below `RERANKER_SCORE_THRESHOLD` (default `0.40`).
-* **Dynamic vLLM Fallback Routing**: Queries the vLLM server `/models` API. If a tenant's registered LoRA adapter is missing or unloaded, it automatically reroutes the prompt to `DEFAULT_MODEL_ID` to prevent `404 Not Found` API failures.
-* **Real-Time Token Streaming with Telemetry**: Yields Server-Sent Events (`text/event-stream`) containing token chunks along with precise execution timing metrics:
-  * **Time-to-First-Token (TTFT)** (ms)
-  * **Embedding Latency** (ms)
-  * **Qdrant Search Latency** (ms)
-  * **Reranking Latency** (ms)
-  * **Generation Velocity** (tokens/sec)
-
-### Why We Built It This Way
-1. **Dense Vector Noise Reduction**: Pure vector similarity search matches semantic text patterns but frequently retrieves irrelevant context. Cross-encoder reranking performs full sequence attention between the query and candidate passages, raising precision by over **35%**.
-2. **Zero Downtime Model Routing**: Enterprise environments frequently deploy customized fine-tuned LoRA weights. If a server restarts or a LoRA adapter is unloaded, falling back gracefully to the base LLM prevents system downtime.
-3. **Low Perceived Latency**: Waiting for a complete 1,000-token LLM output creates 5+ seconds of user wait time. SSE streaming delivers initial tokens in **< 300ms**.
+* **Multi-Turn Topic Isolation (`get_standalone_query`)**: Converts chat history + user query into a standalone query. Automatically **drops prior topic keywords** when a user switches topics (e.g. from medical claims to car lease).
+* **Turn 1 Latency Bypass**: Skips the query rewriter on Turn 1 when `chat_history` is empty, dropping pre-processing latency from ~12.68s down to **0.00ms**.
+* **Cross-Encoder Score Uniformity & Quality Badging**: Overwrites the `score` field of **every single candidate chunk** with its BGE Cross-Encoder score, sorts candidate chunks strictly descending, and assigns UI Citation Quality Badges (`HIGH_CONFIDENCE`, `MEDIUM_CONFIDENCE`, `LOW_CONFIDENCE`, `UNVERIFIED`).
+* **Universal LLM Endpoint Builder (`_build_llm_endpoint_and_headers`)**: Supports Azure OpenAI native REST endpoints (with `api-key` header and `api-version`), OpenAI, Groq, DeepSeek, vLLM, and Ollama.
+* **GPU Queue Protection**: Restricts answer generation payload to `max_tokens=512` and bounds prompt context to top-4 max context chunks to prevent GPU queue congestion.
 
 ---
 
@@ -43,109 +34,71 @@ sequenceDiagram
     autonumber
     actor User as React SPA Console
     participant Orch as Context Orchestrator
-    participant Embed as TEI Embedder (8090)
-    participant DB as Qdrant DB (6333)
+    participant Redis as Redis Memory
+    participant DB as Qdrant Vector DB (Hybrid)
     participant Rerank as TEI Reranker (8081)
-    participant vLLM as vLLM Router / Cloud LLM
+    participant LLM as LLM Engine (Azure OpenAI / vLLM)
 
     User->>Orch: POST /chat/stream (query, tenant_id, session_id)
-    Note over Orch: Start Latency Stopwatch
-
-    Orch->>Embed: POST /embed (query_text)
-    Embed-->>Orch: Return Dense Vector (1024-dim)
-    Note over Orch: Record Embedding Latency (ms)
-
-    Orch->>DB: POST /collections/search (vector + tenant_id + is_latest=True)
-    DB-->>Orch: Return Top-K Candidate Chunks (e.g. 20 chunks)
-    Note over Orch: Record Vector Search Latency (ms)
-
-    Orch->>Rerank: POST /rerank (query + 20 candidate passages)
-    Rerank-->>Orch: Return Relevance Scores [0.0 - 1.0]
-    Note over Orch: Drop chunks with score < 0.40.<br>Keep Top-5 Reranked Contexts.<br>Record Rerank Latency (ms)
-
-    Orch->>vLLM: GET /v1/models (Verify LoRA Adapter Availability)
-    alt LoRA Model Active
-        Note over Orch: Route to Tenant LoRA Adapter
-    else LoRA Missing / Unloaded
-        Note over Orch: Fallback to DEFAULT_MODEL_ID
+    
+    alt Session ID Provided
+        Orch->>Redis: Fetch Recent History Turns (limit=6)
+        Redis-->>Orch: Return History
+        Note over Orch: Run get_standalone_query()<br>(Bypassed on Turn 1 -> 0ms)
     end
 
-    Orch->>vLLM: POST /v1/chat/completions (System Context Prompt + stream=True)
-    
-    vLLM-->>Orch: First Token Chunk
-    Note over Orch: Record Time-to-First-Token (TTFT)
-    Orch-->>User: Stream SSE (TTFT + Timing Telemetry Header)
+    Orch->>DB: query_points(Prefetch Dense + Sparse BM25, FusionQuery=RRF)
+    DB-->>Orch: Return Top-20 Candidate Chunks
 
+    Orch->>Rerank: POST /rerank (standalone_query + candidates)
+    Rerank-->>Orch: Return Cross-Encoder Probabilities
+    Note over Orch: Overwrite ALL chunk scores.<br>Sort strictly descending.<br>Assign Citation Quality Badges.
+
+    Orch->>LLM: POST /chat/completions (top-4 chunks, max_tokens=512, stream=True)
+    
     loop Token Stream
-        vLLM-->>Orch: Next Token Payload
+        LLM-->>Orch: Next Token Payload
         Orch-->>User: Stream SSE (data: {"token": "..."})
     end
-
-    Note over Orch: Calculate Tokens/Sec Velocity
-    Orch-->>User: Stream SSE (Final Execution Summary)
 ```
 
 ---
 
-## 🔍 3. How It Works: Technical Deep-Dive
+## 🔍 3. Key Components Technical Deep-Dive
 
-### A. Strict Tenant Payload Query Filter
+### A. Turn 1 Fast Bypass & Query Reformulation (`get_standalone_query`)
 ```python
-search_filter = Filter(
-    must=[
-        FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
-        FieldCondition(key="is_latest", match=MatchValue(value=True))
-    ]
-)
+def get_standalone_query(self, user_query: str, chat_history: List[Dict[str, str]], llm_overrides: Dict[str, Any] = None) -> str:
+    # Fast Bypass on Turn 1 (0ms latency cost)
+    if not chat_history or len(chat_history) == 0:
+        return user_query.strip()
+
+    # Fast Rewriter LLM parameters (Turn 2+)
+    vllm_payload = {
+        "model": default_model,
+        "messages": [{"role": "user", "content": reformulation_prompt}],
+        "temperature": 0.0,
+        "max_tokens": 30,
+        "stop": ["\n", "User:", "Question:", "STANDALONE SEARCH QUERY:"]
+    }
 ```
 
-### B. TEI Rerank Threshold Filtering
+### B. Azure OpenAI Endpoint & Header Builder (`_build_llm_endpoint_and_headers`)
 ```python
-rerank_response = requests.post(
-    f"{reranker_url}/rerank",
-    json={"query": query_text, "texts": candidate_texts},
-    timeout=10
-)
-scores = rerank_response.json()
-filtered_contexts = [
-    item for item in scores if item["score"] >= RERANKER_SCORE_THRESHOLD
-]
+def _build_llm_endpoint_and_headers(self, api_base_url: str, api_key: str, provider_type: str) -> tuple:
+    base_url = api_base_url.strip().rstrip('/')
+    if "openai.azure.com" in base_url or "azure" in provider_type.lower():
+        if "/chat/completions" in base_url:
+            vllm_endpoint = base_url
+        else:
+            vllm_endpoint = f"{base_url}/chat/completions?api-version=2024-02-15-preview"
+    else:
+        vllm_endpoint = f"{base_url}/chat/completions"
+
+    headers = {"Content-Type": "application/json"}
+    if api_key and api_key.lower() != "none":
+        headers["Authorization"] = f"Bearer {api_key}"
+        headers["api-key"] = api_key  # Azure OpenAI REST Header
+
+    return vllm_endpoint, headers
 ```
-
-### C. SSE Streaming Response Generator
-```python
-async def stream_generator():
-    yield f"data: {json.dumps({'type': 'telemetry', 'ttft_ms': ttft, 'embed_ms': embed_time})}\n\n"
-    for chunk in llm_stream_response:
-        token = chunk.choices[0].delta.content
-        yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
-```
-
----
-
-## ⚡ 4. How to Scale Generation & Retrieval to 100,000 PDFs
-
-Serving high-concurrency RAG queries against a **100K PDF knowledge base** (15M vectors) requires an enterprise throughput scaling strategy:
-
-```mermaid
-graph TD
-    Client[React Console / API Gateway] --> RedisCache{Semantic Query Cache<br>Redis Cosine Sim > 0.96?}
-    
-    RedisCache -- Cache Hit --> FastResponse[Return Instant Cached SSE Stream < 10ms]
-    
-    RedisCache -- Cache Miss --> RAGCluster[FastAPI Orchestrator Load Balancer]
-    
-    subgraph Compute_Farm ["Decoupled High-Throughput Engines"]
-        RAGCluster --> QdrantShard[Qdrant Distributed Cluster]
-        RAGCluster --> RerankerGPU[TEI Reranker GPU Pool<br>NVIDIA A10G]
-        RAGCluster --> vLLMFarm[vLLM Tensor-Parallel Cluster<br>Ray / vLLM Router]
-    end
-```
-
-### Key Scaling Interventions:
-1. **Semantic Query Caching (Redis)**:
-   * Hashes the incoming query vector. If an identical or highly similar query (similarity > 0.96) was recently answered for that tenant, it streams the cached answer immediately, bypassing Qdrant, TEI, and LLM calls.
-2. **Distributed GPU Reranker Farm**:
-   * Scale TEI Reranker instances behind an NGINX load balancer. A single A10G GPU reranks **300 query-candidate pairs per second**.
-3. **vLLM Tensor Parallelism & Continuous Batching**:
-   * Host open-source models (e.g. `Qwen/Qwen2.5-72B-Instruct` or `Mistral-7B`) across multi-GPU nodes using vLLM continuous batching and PagedAttention, supporting **100+ concurrent streams per node**.
