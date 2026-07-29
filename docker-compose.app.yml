@@ -85,6 +85,9 @@ services:
   # 3. ASYNCHRONOUS CELERY INGESTION WORKER POOL
   # -------------------------------------------------------------------
   celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
     image: enterprise-ai-fabric:latest
     container_name: enterprise_rag_celery
     restart: unless-stopped
