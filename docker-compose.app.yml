@@ -41,7 +41,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.app
-    image: ${IMAGE_NAME:-enterprise-ai-fabric:latest}
+    image: ${IMAGE_NAME:-sandyappdev/enterprise-ai-fabric:latest}
     container_name: enterprise_rag_app
     restart: unless-stopped
     ports:
@@ -94,7 +94,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.app
-    image: ${IMAGE_NAME:-enterprise-ai-fabric:latest}
+    image: ${IMAGE_NAME:-sandyappdev/enterprise-ai-fabric:latest}
     container_name: enterprise_rag_celery
     restart: unless-stopped
     command: celery -A src.processing.tasks.celery worker --loglevel=info --concurrency=4
