@@ -3,10 +3,12 @@ import uuid
 import logging
 import requests
 import tiktoken
+from datetime import datetime, timezone
 from typing import List, Dict, Any
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from qdrant_client.models import PointStruct
+from qdrant_client.models import PointStruct, SparseVector
 from src.config import settings
+from src.processing.sparse_encoder import SparseBM25Encoder
 
 logger = logging.getLogger("SemanticSplitter")
 
@@ -67,8 +69,9 @@ class TEIEmbeddingClient:
 
 class SemanticProcessingEngine:
     def __init__(self) -> None:
-        logger.info(f"Connecting to standalone embedding container at: {settings.EMBEDDING_API_URL}")
-        self.embedder = TEIEmbeddingClient(settings.EMBEDDING_API_URL)
+        url = getattr(settings, "EMBEDDING_SERVER_URL", settings.EMBEDDING_API_URL)
+        logger.info(f"Connecting to standalone embedding container at: {url}")
+        self.embedder = TEIEmbeddingClient(url)
         
     def _count_tokens(self, text: str) -> int:
         """Counts exact tokens in a text using the cl100k_base tokenizer (GPT-4 / Gemini standard)."""
@@ -219,35 +222,50 @@ class SemanticProcessingEngine:
         if not flat_child_chunks:
             return []
             
-        # 3. Safely request vector embeddings for all Child chunks in batches
-        logger.info(f"Generating embeddings for {len(flat_child_chunks)} child search targets...")
-        embeddings = self.embedder.embed_documents(flat_child_chunks)
+        # 3. Safely request vector embeddings for all Child chunks in batches (Dense & Sparse)
+        logger.info(f"Generating dense and sparse embeddings for {len(flat_child_chunks)} child search targets...")
+        dense_embeddings = self.embedder.embed_documents(flat_child_chunks)
+        sparse_encoder = SparseBM25Encoder.get_instance()
+        sparse_embeddings = sparse_encoder.embed_documents(flat_child_chunks)
         
-        # 4. Construct PointStruct payloads for Qdrant
+        # 4. Construct PointStruct payloads for Qdrant with dual vectors (dense + sparse)
         for idx, meta in enumerate(child_metadata):
             # Deterministic ID generation to support upserts and prevent conflicts
             seed_str = f"{tenant_id}_{document_family or 'unassigned_family'}_{document_version or '1.0'}_{idx}_{meta['child_text'][:30]}"
             deterministic_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, seed_str))
             
+            child_txt = meta["child_text"]
             payload = {
                 "tenant_id": tenant_id,
                 "parent_id": meta["parent_id"],
                 "parent_text": meta["parent_text"],
-                "page_content": meta["child_text"],             # Standard child target text
-                "document_text": meta["child_text"],           # Compatibility key
+                "page_content": child_txt,                     # Standard child target text
+                "document_text": child_txt,                   # Compatibility key
                 "chunk_type": meta["type"],
                 "page_number": meta["page"],
                 "source_file": filename,
                 "document_family": document_family or "unassigned_family",
                 "document_version": document_version or "1.0",
                 "content_hash": content_hash or "",
-                "is_latest": True
+                "is_latest": True,
+                "ingested_at": datetime.now(timezone.utc).isoformat(),
+                "word_count": len(child_txt.split()),
+                "doc_lang": "en"
+            }
+
+            s_emb = sparse_embeddings[idx]
+            vector_dict = {
+                "dense": dense_embeddings[idx],
+                "sparse": SparseVector(
+                    indices=s_emb.indices.tolist(),
+                    values=s_emb.values.tolist()
+                )
             }
             
             processed_points.append(
                 PointStruct(
                     id=deterministic_id,
-                    vector=embeddings[idx],
+                    vector=vector_dict,
                     payload=payload
                 )
             )

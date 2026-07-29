@@ -31,7 +31,12 @@ export const useAppLogic = () => {
     ragChatHistory, setRagChatHistory, evalRuns, setEvalRuns,
     ingestionHistory, setIngestionHistory,
     lastIngestResults, setLastIngestResults,
-    lastIngestMetrics, setLastIngestMetrics
+    lastIngestMetrics, setLastIngestMetrics,
+    isIngesting, setIsIngesting,
+    ingestProgress, setIngestProgress,
+    ingestStatusText, setIngestStatusText,
+    ingestStartTime, setIngestStartTime,
+    activeJobs, setActiveJobs
   } = store;
 
 const [activeTab, setActiveTab] = useState<string>('query');
@@ -119,16 +124,42 @@ const [activeTab, setActiveTab] = useState<string>('query');
   const [isChatting, setIsChatting] = useState<boolean>(false);
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
-  // Summarization Console States
+  // Document Summarizer States
   const [sumFile, setSumFile] = useState<File | null>(null);
   const [sumLength, setSumLength] = useState<string>('Standard Medium');
   const [sumMaxTokens, setSumMaxTokens] = useState<number>(3000);
   const [isSummarizing, setIsSummarizing] = useState<boolean>(false);
   const [summaryResult, setSummaryResult] = useState<any>(null);
+  const [summarizeMode, setSummarizeMode] = useState<'library' | 'upload'>('library');
+  const [selectedDocumentFamily, setSelectedDocumentFamily] = useState<string>('');
+  const [workspaceDocs, setWorkspaceDocs] = useState<any[]>([]);
+
+  const fetchWorkspaceDocs = async (tenantId?: string) => {
+    const tid = tenantId || currentTenant;
+    if (!tid) return;
+    try {
+      const res = await fetch(`/api/tenants/${tid}/documents`);
+      if (res.ok) {
+        const data = await safeJson(res);
+        if (data && Array.isArray(data.documents)) {
+          setWorkspaceDocs(data.documents);
+          if (data.documents.length > 0 && !selectedDocumentFamily) {
+            setSelectedDocumentFamily(data.documents[0].document_family);
+            setSummarizeMode('library');
+          } else if (data.documents.length === 0) {
+            setSummarizeMode('upload');
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching workspace documents:', e);
+    }
+  };
 
   // Evaluation & Assessment States
   const [evalSource, setEvalSource] = useState<'generate' | 'upload'>('generate');
   const [evalCount, setEvalCount] = useState<number>(3);
+  const [selectedJudgeModel, setSelectedJudgeModel] = useState<string>('');
 
   const [testCases, setTestCases] = useState<EvalTestCase[]>([]);
   const [isTestCaseLoading, setIsTestCaseLoading] = useState<boolean>(false);
@@ -174,6 +205,12 @@ const [activeTab, setActiveTab] = useState<string>('query');
       chatBottomRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [chatHistory, ragChatHistory, currentTenant]);
+
+  useEffect(() => {
+    if (currentTenant) {
+      fetchWorkspaceDocs(currentTenant);
+    }
+  }, [currentTenant]);
 
 
 
@@ -320,6 +357,37 @@ const [activeTab, setActiveTab] = useState<string>('query');
       }
     } catch (e: any) {
       alert(`Activate profile failed: ${e.message}`);
+    }
+  };
+
+  const handleActivateJudgeModel = async (alias: string) => {
+    setIsTestingConnectivity(true);
+    setConnectivityReport(null);
+    try {
+      const res = await fetch('/api/config/profiles/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ alias })
+      });
+      const data = await safeJson(res);
+      if (res.ok) {
+        await Promise.all([fetchProfiles(), fetchConfig(), fetchAvailableModels()]);
+        const connRes = await fetch('/api/evaluations/test-connectivity', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ judge_profile: alias })
+        });
+        if (connRes.ok) {
+          const report = await safeJson(connRes);
+          setConnectivityReport(report);
+        }
+      } else {
+        alert(data.detail || 'Failed to activate Judge Model profile.');
+      }
+    } catch (e: any) {
+      alert(`Activate Judge Model failed: ${e.message}`);
+    } finally {
+      setIsTestingConnectivity(false);
     }
   };
 
@@ -470,6 +538,12 @@ const [activeTab, setActiveTab] = useState<string>('query');
       const data = await safeJson(res);
       if (res.ok) {
         setAdminStatusMsg({ message: data.message || 'Collection reset successfully.', type: 'success' });
+        setLastIngestResults(null);
+        setLastIngestMetrics(null);
+        setActiveJobs([]);
+        setIsIngesting(false);
+        setIngestProgress(0);
+        fetchTenants();
         fetchHealth();
       } else {
         setAdminStatusMsg({ message: data.detail || 'Reset failed.', type: 'error' });
@@ -539,7 +613,8 @@ const [activeTab, setActiveTab] = useState<string>('query');
       if (res.ok && data.results) {
         setActiveJobs(data.results);
       } else {
-        setIngestSummary({ message: data.error || 'Ingestion failed.', type: 'error' });
+        const errMsg = data.error || data.detail || (res.status ? `HTTP ${res.status}: ${res.statusText || 'Upload failed'}` : 'Ingestion failed.');
+        setIngestSummary({ message: errMsg, type: 'error' });
         setIsIngesting(false);
       }
     } catch (err: any) {
@@ -597,7 +672,8 @@ const [activeTab, setActiveTab] = useState<string>('query');
         body: JSON.stringify({
           user_query: textToSubmit,
           temperature: queryTemp,
-          top_k: queryTopK
+          top_k: queryTopK,
+          session_id: `rag_session_${currentTenant}`
         })
       });
 
@@ -720,25 +796,41 @@ const [activeTab, setActiveTab] = useState<string>('query');
   };
 
   // Document Summarization handler
-  const handleSummarizeSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!sumFile) return;
+  const handleSummarizeSubmit = async (e?: React.FormEvent) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!sumFile && !selectedDocumentFamily) return;
     setIsSummarizing(true);
     setSummaryResult(null);
 
+    const activeTenantId = (currentTenant && currentTenant.trim() !== '') ? currentTenant : (tenants && tenants.length > 0 ? tenants[0].tenant_id : 'default');
+
     const formData = new FormData();
-    formData.append('file', sumFile);
+    if (summarizeMode === 'upload' && sumFile) {
+      formData.append('file', sumFile);
+    } else if (summarizeMode === 'library' && selectedDocumentFamily) {
+      formData.append('document_family', selectedDocumentFamily);
+    } else if (sumFile) {
+      formData.append('file', sumFile);
+    } else if (selectedDocumentFamily) {
+      formData.append('document_family', selectedDocumentFamily);
+    }
+
     formData.append('summary_length', sumLength);
     formData.append('max_tokens', String(sumMaxTokens));
-    formData.append('max_context_chars', '300000');
+    formData.append('max_context_chars', '50000');
 
     try {
-      const res = await fetch(`/api/tenants/${currentTenant}/summarize`, {
+      const res = await fetch(`/api/tenants/${activeTenantId}/summarize`, {
         method: 'POST',
         body: formData
       });
       const data = await safeJson(res);
-      setSummaryResult(data);
+      if (!res.ok) {
+        const errorMsg = data?.detail || data?.message || `Summarization failed with HTTP status ${res.status}`;
+        setSummaryResult({ status: 'error', message: errorMsg });
+      } else {
+        setSummaryResult(data);
+      }
     } catch (e: any) {
       setSummaryResult({ status: 'error', message: `Pipeline execution failed: ${e.message}` });
     } finally {
@@ -753,7 +845,8 @@ const [activeTab, setActiveTab] = useState<string>('query');
     try {
       const res = await fetch('/api/evaluations/test-connectivity', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ judge_model: selectedJudgeModel || config.DEFAULT_MODEL_ID })
       });
       if (res.ok) {
         const report = await safeJson(res);
@@ -779,7 +872,10 @@ const [activeTab, setActiveTab] = useState<string>('query');
       const res = await fetch(`/api/tenants/${currentTenant}/evaluations/generate-test-set`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ count: evalCount })
+        body: JSON.stringify({ 
+          count: evalCount,
+          judge_model: selectedJudgeModel || config.DEFAULT_MODEL_ID
+        })
       });
 
       if (!res.ok) {
@@ -888,7 +984,8 @@ const [activeTab, setActiveTab] = useState<string>('query');
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          test_set: testCases
+          test_set: testCases,
+          judge_model: selectedJudgeModel || config.DEFAULT_MODEL_ID
         })
       });
 
@@ -923,6 +1020,8 @@ const [activeTab, setActiveTab] = useState<string>('query');
                 total: parsed.total,
                 message: parsed.message
               });
+            } else if (parsed.type === 'error') {
+              throw new Error(parsed.message || 'Evaluation engine fault encountered.');
             } else if (parsed.type === 'result') {
               const data = parsed.data;
               if (data.status === 'success') {
@@ -1110,6 +1209,7 @@ const [activeTab, setActiveTab] = useState<string>('query');
     uploadedFiles, setUploadedFiles,
     fileConfigs, setFileConfigs,
     isIngesting, setIsIngesting,
+    activeJobs, setActiveJobs,
     ingestProgress, setIngestProgress,
     ingestStatusText, setIngestStatusText,
     ingestSummary, setIngestSummary,
@@ -1143,6 +1243,10 @@ const [activeTab, setActiveTab] = useState<string>('query');
     sumMaxTokens, setSumMaxTokens,
     isSummarizing, setIsSummarizing,
     summaryResult, setSummaryResult,
+    summarizeMode, setSummarizeMode,
+    selectedDocumentFamily, setSelectedDocumentFamily,
+    workspaceDocs, setWorkspaceDocs,
+    fetchWorkspaceDocs,
     evalSource, setEvalSource,
     evalCount, setEvalCount,
     testCases, setTestCases,
@@ -1174,6 +1278,7 @@ const [activeTab, setActiveTab] = useState<string>('query');
     fetchEvalRuns,
     handleDeleteEvalRun,
     handleActivateProfile,
+    handleActivateJudgeModel,
     handleOnboardProfile,
     handleSaveDownstreamSettings,
     handleDeleteProfile,
@@ -1185,6 +1290,12 @@ const [activeTab, setActiveTab] = useState<string>('query');
     handleQuerySubmit,
     handleSendChat,
     handleSummarizeSubmit,
+    evalSource,
+    setEvalSource,
+    evalCount,
+    setEvalCount,
+    selectedJudgeModel,
+    setSelectedJudgeModel,
     handleTestConnectivity,
     handleGenerateTestSet,
     getScoreStatusBadge,

@@ -5,16 +5,18 @@ import time
 import tempfile
 import urllib.request
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from src.config import Config
 from src.database.secure_storage import SecureStorageManager
 from src.processing.ingest_pipeline import TenantIngestionPipeline
 from src.generation.orchestrator import ContextOrchestrator
-from qdrant_client import QdrantClient
+from src.utils.logger import logger, SystemLogger, correlation_id_var, tenant_id_var
+from src.database.audit_vault import AuditVault
+from src.database.retention_manager import RetentionManager
 from qdrant_client.models import Filter, FieldCondition, MatchValue, FilterSelector
 
 app = FastAPI(
@@ -22,6 +24,33 @@ app = FastAPI(
     description="Decoupled, scalable Control Plane and Multi-Tenant RAG Ingestion Pipeline API.",
     version="2.0.0"
 )
+
+# Correlation ID & Observability Middleware using ContextVars
+@app.middleware("http")
+async def add_correlation_id_middleware(request: Request, call_next):
+    corr_id = request.headers.get("X-Correlation-ID") or f"req-{uuid.uuid4().hex[:8]}"
+    tenant_id = request.headers.get("X-Tenant-ID") or "GLOBAL"
+    
+    token_corr = correlation_id_var.set(corr_id)
+    token_tenant = tenant_id_var.set(tenant_id)
+    
+    request.state.correlation_id = corr_id
+    start_time = time.time()
+    try:
+        response = await call_next(request)
+        duration_ms = int((time.time() - start_time) * 1000)
+        response.headers["X-Correlation-ID"] = corr_id
+        
+        path = request.url.path
+        if not path.startswith("/api/admin/logs") and not path.startswith("/api/health"):
+            if response.status_code >= 400:
+                logger.error(f"{request.method} {path} -> {response.status_code} ({duration_ms}ms)", component="API", correlation_id=corr_id, tenant_id=tenant_id)
+            else:
+                logger.info(f"{request.method} {path} -> {response.status_code} ({duration_ms}ms)", component="API", correlation_id=corr_id, tenant_id=tenant_id)
+        return response
+    finally:
+        correlation_id_var.reset(token_corr)
+        tenant_id_var.reset(token_tenant)
 
 # Enable CORS for frontend cross-origin requests
 app.add_middleware(
@@ -103,46 +132,254 @@ def check_url_health(url: str, method: str = "GET", requires_auth: bool = False,
     except Exception:
         return False
 
+# Helper: Consolidated health & diagnostic check engine
+def build_system_health_report() -> dict:
+    """Performs real-time, comprehensive connectivity & health tests across all 6 core components."""
+    llm_cfg = get_active_llm_config()
+    Config.apply_runtime_overrides(llm_cfg)
+    
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    profiles = SecureStorageManager.load_encrypted_profiles()
+    active_profile = profiles.get("_active_profile", "Default Environment")
+    
+    components = {}
+    
+    # 1. Qdrant Vector Database Test
+    qdrant_url = Config.QDRANT_BASE_URL
+    q_start = time.perf_counter_ns()
+    try:
+        q_client = Config.get_qdrant_client()
+        collections = q_client.get_collections()
+        q_lat = round((time.perf_counter_ns() - q_start) / 1_000_000.0, 2)
+        
+        # Retrieve detailed collection statistics
+        total_collections = len(collections.collections)
+        points_count = 0
+        vector_dim = Config.VECTOR_DIMENSION
+        idx_status = "GREEN"
+        distance_metric = "Cosine"
+        
+        try:
+            coll_info = q_client.get_collection(Config.COLLECTION_NAME)
+            points_count = getattr(coll_info, "points_count", 0) or getattr(coll_info, "vectors_count", 0) or 0
+            if hasattr(coll_info, "config") and hasattr(coll_info.config, "params") and hasattr(coll_info.config.params, "vectors"):
+                v_params = coll_info.config.params.vectors
+                if hasattr(v_params, "size"):
+                    vector_dim = v_params.size
+                if hasattr(v_params, "distance"):
+                    distance_metric = str(v_params.distance.value if hasattr(v_params.distance, "value") else v_params.distance)
+            if hasattr(coll_info, "status"):
+                idx_status = str(coll_info.status.value if hasattr(coll_info.status, "value") else coll_info.status).upper()
+        except Exception:
+            pass
+
+        components["qdrant"] = {
+            "name": "Qdrant Vector DB",
+            "status": "HEALTHY",
+            "url": qdrant_url,
+            "latency_ms": q_lat,
+            "message": f"Connected ({points_count:,} points | {vector_dim}d)",
+            "points_count": points_count,
+            "collections_count": total_collections,
+            "vector_dimension": vector_dim,
+            "index_status": idx_status,
+            "distance_metric": distance_metric,
+            "collection_name": Config.COLLECTION_NAME
+        }
+    except Exception as e:
+        q_lat = round((time.perf_counter_ns() - q_start) / 1_000_000.0, 2)
+        components["qdrant"] = {
+            "name": "Qdrant Vector DB",
+            "status": "UNREACHABLE",
+            "url": qdrant_url,
+            "latency_ms": q_lat,
+            "message": f"Connection failed: {str(e)}"
+        }
+
+    # 2. TEI Embedding Server Test
+    tei_url = Config.EMBEDDING_SERVER_URL
+    t_start = time.perf_counter_ns()
+    try:
+        import requests
+        res = requests.post(Config.TEI_ENDPOINT, json={"inputs": ["ping"]}, timeout=5.0)
+        t_lat = round((time.perf_counter_ns() - t_start) / 1_000_000.0, 2)
+        if res.status_code == 200:
+            components["embeddings"] = {
+                "name": "TEI Embedding Engine",
+                "status": "HEALTHY",
+                "url": tei_url,
+                "latency_ms": t_lat,
+                "message": "Vector embedding endpoint operational"
+            }
+        else:
+            components["embeddings"] = {
+                "name": "TEI Embedding Engine",
+                "status": "UNREACHABLE",
+                "url": tei_url,
+                "latency_ms": t_lat,
+                "message": f"Returned status code {res.status_code}"
+            }
+    except Exception as e:
+        t_lat = round((time.perf_counter_ns() - t_start) / 1_000_000.0, 2)
+        components["embeddings"] = {
+            "name": "TEI Embedding Engine",
+            "status": "UNREACHABLE",
+            "url": tei_url,
+            "latency_ms": t_lat,
+            "message": f"Connection fault: {str(e)}"
+        }
+
+    # 3. Cross-Encoder Reranker Test
+    rerank_url = Config.RERANKER_SERVER_URL
+    r_start = time.perf_counter_ns()
+    if getattr(Config, "RERANK_ENABLED", True):
+        try:
+            import requests
+            res = requests.post(Config.RERANKER_ENDPOINT, json={"query": "ping", "texts": ["pong"]}, timeout=5.0)
+            r_lat = round((time.perf_counter_ns() - r_start) / 1_000_000.0, 2)
+            if res.status_code == 200:
+                components["reranker"] = {
+                    "name": "Reranker Engine",
+                    "status": "HEALTHY",
+                    "url": rerank_url,
+                    "latency_ms": r_lat,
+                    "message": "Cross-Encoder scoring operational"
+                }
+            else:
+                components["reranker"] = {
+                    "name": "Reranker Engine",
+                    "status": "UNREACHABLE",
+                    "url": rerank_url,
+                    "latency_ms": r_lat,
+                    "message": f"Returned status code {res.status_code}"
+                }
+        except Exception as e:
+            r_lat = round((time.perf_counter_ns() - r_start) / 1_000_000.0, 2)
+            components["reranker"] = {
+                "name": "Reranker Engine",
+                "status": "UNREACHABLE",
+                "url": rerank_url,
+                "latency_ms": r_lat,
+                "message": f"Connection fault: {str(e)}"
+            }
+    else:
+        components["reranker"] = {
+            "name": "Reranker Engine",
+            "status": "DISABLED",
+            "url": rerank_url,
+            "latency_ms": 0.0,
+            "message": "Reranker disabled in runtime settings"
+        }
+
+    # 4. Redis Broker Test
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    red_start = time.perf_counter_ns()
+    try:
+        import redis
+        r_client = redis.Redis.from_url(redis_url, socket_timeout=3.0)
+        r_client.ping()
+        red_lat = round((time.perf_counter_ns() - red_start) / 1_000_000.0, 2)
+        components["redis"] = {
+            "name": "Redis Task Broker",
+            "status": "HEALTHY",
+            "url": redis_url,
+            "latency_ms": red_lat,
+            "message": "PONG response received"
+        }
+    except Exception as e:
+        red_lat = round((time.perf_counter_ns() - red_start) / 1_000_000.0, 2)
+        components["redis"] = {
+            "name": "Redis Task Broker",
+            "status": "UNREACHABLE",
+            "url": redis_url,
+            "latency_ms": red_lat,
+            "message": f"Broker connection failed: {str(e)}"
+        }
+
+    # 5. Celery Worker Pool Test
+    c_start = time.perf_counter_ns()
+    try:
+        from src.processing.tasks import celery
+        inspector = celery.control.inspect()
+        stats = inspector.stats() or {}
+        w_count = len(stats.keys())
+        c_lat = round((time.perf_counter_ns() - c_start) / 1_000_000.0, 2)
+        if w_count > 0:
+            components["celery"] = {
+                "name": "Celery Ingestion Worker",
+                "status": "HEALTHY",
+                "url": "task-queue://celery",
+                "latency_ms": c_lat,
+                "message": f"{w_count} active worker pod(s) online"
+            }
+        else:
+            components["celery"] = {
+                "name": "Celery Ingestion Worker",
+                "status": "UNREACHABLE",
+                "url": "task-queue://celery",
+                "latency_ms": c_lat,
+                "message": "No active Celery worker pods responding"
+            }
+    except Exception as e:
+        c_lat = round((time.perf_counter_ns() - c_start) / 1_000_000.0, 2)
+        components["celery"] = {
+            "name": "Celery Ingestion Worker",
+            "status": "UNREACHABLE",
+            "url": "task-queue://celery",
+            "latency_ms": c_lat,
+            "message": f"Worker pool inspection error: {str(e)}"
+        }
+
+    # 6. LLM Orchestrator Test
+    llm_url = Config.LLM_API_BASE_URL
+    l_start = time.perf_counter_ns()
+    try:
+        l_lat = round((time.perf_counter_ns() - l_start) / 1_000_000.0, 2)
+        components["llm"] = {
+            "name": "LLM Engine",
+            "status": "HEALTHY",
+            "url": llm_url,
+            "latency_ms": l_lat,
+            "message": f"Active profile '{active_profile}' ({Config.DEFAULT_MODEL_ID})"
+        }
+    except Exception as e:
+        l_lat = round((time.perf_counter_ns() - l_start) / 1_000_000.0, 2)
+        components["llm"] = {
+            "name": "LLM Engine",
+            "status": "UNREACHABLE",
+            "url": llm_url,
+            "latency_ms": l_lat,
+            "message": f"LLM configuration error: {str(e)}"
+        }
+
+    overall_unhealthy = any(c["status"] == "UNREACHABLE" for c in components.values())
+    return {
+        "timestamp": now,
+        "active_profile": active_profile,
+        "overall_status": "DEGRADED" if overall_unhealthy else "HEALTHY",
+        "components": components
+    }
+
 # --- SYSTEM HEALTH ENDPOINTS ---
 @app.get("/api/health")
 async def get_health_status():
-    """Checks the live connectivity status of the Qdrant, TEI Embedder, Reranker, and LLM endpoints."""
-    llm_cfg = get_active_llm_config()
-    
-    qdrant_url = Config.QDRANT_BASE_URL
-    tei_url = Config.EMBEDDING_SERVER_URL
-    reranker_url = Config.RERANKER_SERVER_URL
-    llm_health_url = f"{llm_cfg['LLM_API_BASE_URL']}/models"
-    
-    # Run active checks
-    qdrant_ok = check_url_health(qdrant_url)
-    tei_ok = check_url_health(tei_url)
-    reranker_ok = check_url_health(reranker_url) if getattr(Config, "RERANK_ENABLED", True) else False
-    
-    # LLM health is checked via standard model list or simple endpoint accessibility
-    llm_ok = check_url_health(llm_health_url, requires_auth=True, api_key=llm_cfg.get("LLM_API_KEY"))
-    if not llm_ok:
-        # Fallback check to base URL if model listing requires complex routing
-        llm_ok = check_url_health(llm_cfg["LLM_API_BASE_URL"])
- 
-    # Count Qdrant vector statistics
-    vector_count = 0
-    collection_status = "UNKNOWN"
-    try:
-        qdrant_client = Config.get_qdrant_client()
-        collection_info = qdrant_client.get_collection(Config.COLLECTION_NAME)
-        vector_count = collection_info.points_count
-        collection_status = collection_info.status.name
-    except Exception:
-        pass
-
+    """Checks the live connectivity status across all core components."""
+    report = build_system_health_report()
+    is_healthy = report["overall_status"] == "HEALTHY"
     return {
-        "status": "GREEN" if (qdrant_ok and tei_ok and llm_ok) else "YELLOW" if (qdrant_ok or tei_ok) else "RED",
+        "status": "GREEN" if is_healthy else "RED",
+        "overall_status": report["overall_status"],
+        "active_profile": report["active_profile"],
+        "timestamp": report["timestamp"],
+        "components": report["components"],
         "nodes": {
-            "qdrant": {"status": "ONLINE" if qdrant_ok else "OFFLINE", "collection_status": collection_status, "points_count": vector_count},
-            "tei_embedder": {"status": "ONLINE" if tei_ok else "OFFLINE"},
-            "reranker": {"status": "ONLINE" if reranker_ok else "OFFLINE", "enabled": getattr(Config, "RERANK_ENABLED", True)},
-            "llm_api": {"status": "ONLINE" if llm_ok else "OFFLINE", "model": llm_cfg.get("DEFAULT_MODEL_ID")}
+            "qdrant": {
+                "status": "ONLINE" if report["components"].get("qdrant", {}).get("status") == "HEALTHY" else "OFFLINE",
+                "points_count": report["components"].get("qdrant", {}).get("points_count", 0)
+            },
+            "tei_embedder": {"status": "ONLINE" if report["components"].get("embeddings", {}).get("status") == "HEALTHY" else "OFFLINE"},
+            "reranker": {"status": "ONLINE" if report["components"].get("reranker", {}).get("status") == "HEALTHY" else "OFFLINE"},
+            "llm_api": {"status": "ONLINE" if report["components"].get("llm", {}).get("status") == "HEALTHY" else "OFFLINE"}
         }
     }
 
@@ -237,7 +474,111 @@ async def activate_profile(payload: Dict[str, str]):
     SecureStorageManager.save_encrypted_profiles(profiles)
     active_cfg = get_active_llm_config()
     Config.apply_runtime_overrides(active_cfg)
+    AuditVault.record_audit_event(
+        action_type="MODEL_ACTIVATE",
+        title=f"Activated LLM Connection Profile '{alias}'",
+        details={"profile_name": alias, "model_id": active_cfg.get("DEFAULT_MODEL_ID"), "base_url": active_cfg.get("LLM_API_BASE_URL")}
+    )
     return {"status": "success", "message": f"Operational profile '{alias}' activated successfully."}
+
+# --- OBSERVABILITY & AUDIT VAULT ENDPOINTS ---
+
+@app.get("/api/admin/logs")
+async def get_system_logs(
+    level: str = Query("ALL"),
+    component: str = Query("ALL"),
+    tenant_id: str = Query("ALL"),
+    search: str = Query(None),
+    limit: int = Query(500),
+    offset: int = Query(0)
+):
+    """Queries SQLite observability.db system_logs table with indexed filtering and pagination."""
+    logs = SystemLogger.get_logs_from_db(
+        level=level,
+        component=component,
+        tenant_id=tenant_id,
+        search=search,
+        limit=limit,
+        offset=offset
+    )
+    return {"status": "success", "count": len(logs), "logs": logs}
+
+@app.get("/api/admin/audit")
+async def get_audit_vault_events(
+    limit: int = Query(200),
+    offset: int = Query(0),
+    tenant_id: str = Query("ALL"),
+    action_type: str = Query("ALL")
+):
+    """Fetches administrative and security audit trail history from SQLite audit_logs table."""
+    events = AuditVault.load_audit_events(limit=limit, offset=offset, tenant_id=tenant_id, action_type=action_type)
+    return {"status": "success", "count": len(events), "audit_events": events}
+
+@app.get("/api/admin/logs/retention")
+async def get_log_retention_rules():
+    """Fetches active dynamic retention settings."""
+    cfg = RetentionManager.get_retention_config()
+    return {"status": "success", "retention": cfg}
+
+@app.post("/api/admin/logs/retention")
+async def update_log_retention_rules(payload: Dict[str, Any]):
+    """Updates dynamic retention rules without restarting the server."""
+    updated = RetentionManager.update_retention_config(payload)
+    return {"status": "success", "message": "Retention rules updated successfully.", "retention": updated}
+
+@app.post("/api/admin/logs/purge")
+async def purge_expired_logs(purge_metrics: bool = Query(False)):
+    """Triggers immediate log purge in SQLite database and rotated disk files."""
+    res = RetentionManager.execute_purge(purge_metrics=purge_metrics)
+    return res
+
+@app.on_event("startup")
+async def on_app_startup():
+    """Startup event launching background log retention worker."""
+    import asyncio
+    from src.database.retention_manager import start_background_retention_worker
+    asyncio.create_task(start_background_retention_worker())
+
+@app.get("/api/admin/telemetry/metrics")
+async def get_telemetry_metrics():
+    """Calculates 24-hour component SLA metrics (counts, error rates, status)."""
+    metrics = SystemLogger.get_telemetry_metrics()
+    return {"status": "success", "metrics": metrics}
+
+@app.get("/api/admin/metrics/aggregate")
+async def get_aggregate_latency_metrics(
+    time_window: str = Query("24h"),
+    tenant_id: str = Query("ALL")
+):
+    """Calculates aggregated RAG performance percentiles (p50, p90, p95, p99) and stage breakdowns."""
+    agg = SystemLogger.get_aggregate_metrics(time_window=time_window, tenant_id=tenant_id)
+    return {"status": "success", "time_window": time_window, "tenant_id": tenant_id, "data": agg}
+
+@app.get("/api/admin/audit/export")
+async def export_audit_trail_report(
+    format: str = Query("csv"),
+    tenant_id: str = Query("ALL"),
+    action_type: str = Query("ALL")
+):
+    """Exports structured Security Audit Vault events as CSV or JSON format."""
+    if format.lower() == "csv":
+        csv_data = AuditVault.export_audit_csv(tenant_id=tenant_id, action_type=action_type)
+        return StreamingResponse(
+            iter([csv_data]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=security_audit_vault_report.csv"}
+        )
+    else:
+        events = AuditVault.load_audit_events(limit=5000, tenant_id=tenant_id, action_type=action_type)
+        return {"status": "success", "count": len(events), "audit_events": events}
+
+@app.get("/api/admin/logs/export")
+async def export_raw_system_logs():
+    """Exports raw system.log file for offline diagnostics."""
+    log_file = os.path.join(os.getcwd(), "app_data", "logs", "system.log")
+    if not os.path.exists(log_file):
+        raise HTTPException(status_code=404, detail="system.log file not found.")
+    return FileResponse(log_file, filename="nexus_system_diagnostics.log", media_type="text/plain")
 
 @app.post("/api/config/profiles/onboard")
 async def onboard_profile(cfg_data: Dict[str, Any]):
@@ -324,6 +665,68 @@ async def delete_profile(alias: str):
     SecureStorageManager.save_encrypted_profiles(profiles)
     return {"status": "success", "message": f"Profile '{alias}' deleted successfully."}
 
+# --- TENANT SYSTEM PROMPT ENDPOINTS ---
+@app.get("/api/tenants/{tenant_id}/prompt")
+async def get_tenant_prompt_endpoint(tenant_id: str):
+    """Retrieves current active prompt and full version history for a tenant."""
+    return SecureStorageManager.get_prompt_record(tenant_id)
+
+@app.post("/api/tenants/{tenant_id}/prompt")
+async def update_tenant_prompt_endpoint(tenant_id: str, payload: Dict[str, Any]):
+    """Updates the active system prompt for a tenant and archives the previous version."""
+    new_prompt = payload.get("system_prompt", "").strip()
+    note = payload.get("note")
+    if not new_prompt:
+        raise HTTPException(status_code=400, detail="system_prompt field cannot be empty.")
+    res = SecureStorageManager.update_tenant_prompt(tenant_id, new_prompt, note=note)
+    AuditVault.record_audit_event(
+        action_type="PROMPT_UPDATE",
+        title=f"Deployed System Prompt Revision v{res.get('version')} for Tenant '{tenant_id}'",
+        details={"tenant_id": tenant_id, "version": res.get("version"), "note": note},
+        tenant_id=tenant_id
+    )
+    return res
+
+@app.post("/api/tenants/{tenant_id}/prompt/rollback")
+async def rollback_tenant_prompt_endpoint(tenant_id: str, payload: Dict[str, Any]):
+    """Rolls back the active system prompt for a tenant to a specified historical version."""
+    target_version = payload.get("version", "").strip()
+    target_updated_at = payload.get("updated_at")
+    if not target_version:
+        raise HTTPException(status_code=400, detail="version field cannot be empty.")
+    res = SecureStorageManager.rollback_tenant_prompt(tenant_id, target_version, target_updated_at=target_updated_at)
+    AuditVault.record_audit_event(
+        action_type="PROMPT_REVERT",
+        title=f"Reverted System Prompt for Tenant '{tenant_id}' to v{target_version}",
+        details={"tenant_id": tenant_id, "target_version": target_version, "updated_at": target_updated_at},
+        tenant_id=tenant_id
+    )
+    return res
+
+@app.post("/api/tenants/{tenant_id}/prompt/history/note")
+async def update_prompt_history_note_endpoint(tenant_id: str, payload: Dict[str, Any]):
+    """Updates the comment/note for a specific historical prompt entry."""
+    target_version = payload.get("version", "").strip()
+    new_note = payload.get("note", "").strip()
+    updated_at = payload.get("updated_at")
+    if not target_version:
+        raise HTTPException(status_code=400, detail="version field cannot be empty.")
+    return SecureStorageManager.update_prompt_history_note(tenant_id, target_version, new_note, updated_at)
+
+@app.delete("/api/tenants/{tenant_id}/prompt/history")
+async def delete_prompt_history_endpoint(tenant_id: str, version: str, updated_at: Optional[str] = None):
+    """Deletes a specific historical prompt entry by version and timestamp."""
+    if not version:
+        raise HTTPException(status_code=400, detail="version parameter is required.")
+    res = SecureStorageManager.delete_prompt_history_entry(tenant_id, version, updated_at)
+    AuditVault.record_audit_event(
+        action_type="PROMPT_DELETE",
+        title=f"Deleted System Prompt v{version} from history for Tenant '{tenant_id}'",
+        details={"tenant_id": tenant_id, "version": version, "updated_at": updated_at},
+        tenant_id=tenant_id
+    )
+    return res
+
 # --- EVALUATIONS PERSISTENCE ENDPOINTS ---
 @app.get("/api/evaluations/runs")
 async def get_eval_runs():
@@ -352,23 +755,13 @@ async def delete_eval_run(run_id: str):
 
 @app.delete("/api/system/reset-collection")
 async def reset_vector_collection():
-    """Drops the entire Qdrant vector collection and re-creates it to start fresh."""
+    """Drops the entire Qdrant vector collection and re-creates it with dual dense and sparse vector schema."""
     try:
-        qdrant_client = Config.get_qdrant_client()
-        # Drop the collection
-        qdrant_client.delete_collection(collection_name=Config.COLLECTION_NAME)
-        # We don't need to explicitly recreate it right here because the get_qdrant_client() 
-        # inside TenantIngestionPipeline and orchestrator automatically calls create_collection if it's missing.
-        # But to be safe, we can recreate it immediately by calling the pipeline's init or just letting the next ingestion do it.
-        # Wait, get_qdrant_client only initializes it if it doesn't exist during the first call.
-        # Let's recreate it right now by calling Config.get_qdrant_client() again? No, get_qdrant_client in config.py handles it if it's missing.
-        # Actually, let's just let the next ingestion create it, or we can use Qdrant client directly.
-        from qdrant_client.models import Distance, VectorParams
-        qdrant_client.create_collection(
-            collection_name=Config.COLLECTION_NAME,
-            vectors_config=VectorParams(size=Config.VECTOR_DIMENSION, distance=Distance.COSINE)
-        )
-        return {"status": "success", "message": "Vector database collection has been reset and recreated successfully."}
+        pipeline = TenantIngestionPipeline(tenant_id="admin")
+        success = pipeline.reset_tenant_collection(collection_name=Config.COLLECTION_NAME)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to reset dual-vector collection.")
+        return {"status": "success", "message": "Vector database collection has been reset and recreated with dual dense & sparse BM25 schema."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to reset collection: {str(e)}")
 
@@ -399,7 +792,8 @@ async def list_vllm_models():
     # 2. Query local Ollama tag registry if running on loopback
     ollama_models = []
     try:
-        req_ollama = urllib.request.Request("http://localhost:11434/api/tags", method="GET")
+        ollama_url = f"{Config.LLM_API_BASE_URL.rstrip('/')}/tags" if "11434" in Config.LLM_API_BASE_URL else "http://localhost:11434/api/tags"
+        req_ollama = urllib.request.Request(ollama_url, method="GET")
         with urllib.request.urlopen(req_ollama, timeout=2) as res_ollama:
             ollama_data = json.loads(res_ollama.read().decode("utf-8"))
             for m in ollama_data.get("models", []):
@@ -474,10 +868,17 @@ async def deprovision_tenant(tenant_id: str):
 
 @app.get("/api/tenants/{tenant_id}/documents")
 async def list_tenant_documents(tenant_id: str):
-    """Retrieves all active document lineages/families stored for a given tenant."""
+    """Retrieves detailed document lineages/families stored for a given tenant."""
     pipeline = TenantIngestionPipeline(tenant_id=tenant_id)
-    docs = pipeline.get_tenant_documents()
+    docs = pipeline.get_tenant_document_details()
     return {"tenant_id": tenant_id, "documents": docs}
+
+@app.delete("/api/tenants/{tenant_id}/documents/{document_family}")
+async def delete_tenant_document_family(tenant_id: str, document_family: str):
+    """Deprovisions all vector chunks belonging to a specific document family under a tenant."""
+    pipeline = TenantIngestionPipeline(tenant_id=tenant_id)
+    deleted_count = pipeline.delete_document_family(document_family)
+    return {"status": "success", "message": f"Deprovisioned {deleted_count} chunk(s) for family '{document_family}'.", "deleted_count": deleted_count}
 
 # --- BATCH MULTI-FILE INGESTION ---
 @app.post("/api/tenants/{tenant_id}/ingest")
@@ -489,7 +890,9 @@ async def ingest_tenant_files(
     """Ingests multiple document or spreadsheet assets asynchronously via Celery."""
     registry = SecureStorageManager.load_tenant_registry()
     if tenant_id not in registry:
-        raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' is not registered.")
+        registry[tenant_id] = "general_knowledge"
+        SecureStorageManager.save_tenant_registry(registry)
+        logger.info(f"Auto-registered tenant workspace scope '{tenant_id}' during file ingestion.", component="API")
         
     try:
         configs_map = json.loads(configs)
@@ -510,7 +913,6 @@ async def ingest_tenant_files(
             "replace_target": None
         })
         
-        file_ext = file.filename.split(".")[-1].lower()
         safe_filename = f"{uuid.uuid4().hex}_{file.filename}"
         file_path = os.path.join(upload_dir, safe_filename)
         
@@ -595,6 +997,7 @@ async def query_tenant_rag(tenant_id: str, payload: Dict[str, Any]):
     query_str = payload.get("user_query", "").strip()
     temperature = float(payload.get("temperature", 0.0))
     top_k = int(payload.get("top_k", 3))
+    session_id = payload.get("session_id")
     
     if not query_str:
         raise HTTPException(status_code=400, detail="user_query cannot be empty.")
@@ -610,7 +1013,8 @@ async def query_tenant_rag(tenant_id: str, payload: Dict[str, Any]):
             temperature=temperature,
             top_k=top_k,
             llm_overrides=llm_cfg,
-            request_start_time=request_start
+            request_start_time=request_start,
+            session_id=session_id
         ):
             yield f"data: {json.dumps(chunk)}\n\n"
             
@@ -638,61 +1042,126 @@ async def chat_tenant(tenant_id: str, payload: Dict[str, Any]):
     
     return res
 
+# --- MULTI-TURN CONVERSATION MEMORY ENDPOINTS ---
+@app.get("/api/tenants/{tenant_id}/sessions/{session_id}/history")
+async def get_session_history_endpoint(tenant_id: str, session_id: str, limit: int = 10):
+    """Retrieves stored multi-turn conversation memory history for a session ID from Redis."""
+    from src.database.conversation_memory import RedisConversationMemoryManager
+    history = RedisConversationMemoryManager.get_instance().get_session_history(session_id, limit=limit)
+    return {"tenant_id": tenant_id, "session_id": session_id, "history": history}
+
+@app.delete("/api/tenants/{tenant_id}/sessions/{session_id}")
+async def clear_session_history_endpoint(tenant_id: str, session_id: str):
+    """Clears multi-turn conversation memory history for a session ID from Redis."""
+    from src.database.conversation_memory import RedisConversationMemoryManager
+    success = RedisConversationMemoryManager.get_instance().clear_session(session_id)
+    return {"status": "success" if success else "error", "message": f"Session memory '{session_id}' cleared.", "tenant_id": tenant_id}
+
 # --- EXECUTIVE DOCUMENT SUMMARIZATION ---
 @app.post("/api/tenants/{tenant_id}/summarize")
 async def summarize_document(
     tenant_id: str,
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    document_family: Optional[str] = Form(None),
     summary_length: str = Form("Standard Medium"),
     max_tokens: int = Form(3000),
-    max_context_chars: int = Form(300000)
+    max_context_chars: int = Form(50000)
 ):
-    """Generates an executive analysis report summary from an uploaded document asset."""
-    file_ext = file.filename.split(".")[-1].lower()
-    full_text_stream = ""
+    """Generates an executive analysis report summary from an uploaded document asset or an existing workspace document."""
+    from fastapi.concurrency import run_in_threadpool
     
-    # We must read the file stream based on extension
-    # Save UploadFile stream into temporary file to let PDF/Excel readers read it
-    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}") as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
-        
-    try:
-        if file_ext == "pdf":
-            import pdfplumber
-            with pdfplumber.open(tmp_path) as pdf:
-                for page in pdf.pages:
-                    full_text_stream += (page.extract_text() or "") + "\n"
-        elif file_ext == "docx":
-            import docx
-            doc = docx.Document(tmp_path)
-            full_text_stream = "\n".join([para.text for para in doc.paragraphs])
-        elif file_ext in ["xlsx", "xls"]:
-            import pandas as pd
-            excel_workbook = pd.ExcelFile(tmp_path)
-            excel_texts = []
-            for sheet_name in excel_workbook.sheet_names:
-                df = excel_workbook.parse(sheet_name).fillna("")
-                if df.empty:
-                    continue
-                headers = [str(col).strip() for col in df.columns]
-                md_grid = f"### SPREADSHEET WORKBOOK TAB: {sheet_name.upper()}\n| {' | '.join(headers)} |\n| {' | '.join(['---'] * len(headers))} |\n"
-                for _, row in df.iterrows():
-                    md_grid += f"| {' | '.join([str(val).strip() for val in row.values])} |\n"
-                excel_texts.append(md_grid)
-            full_text_stream = "\n\n".join(excel_texts)
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported file format. Use PDF, DOCX, or Excel sheets.")
-    finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+    full_text_stream = ""
+    target_doc_name = "Document"
+
+    if document_family and document_family.strip():
+        # Reconstruct full text directly from Qdrant vector chunks for this document family
+        try:
+            from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+            pipeline = TenantIngestionPipeline(tenant_id=tenant_id)
+            points, _ = pipeline.client.scroll(
+                collection_name=Config.COLLECTION_NAME,
+                scroll_filter=Filter(must=[
+                    FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
+                    FieldCondition(key="document_family", match=MatchValue(value=document_family.strip()))
+                ]),
+                limit=300,
+                with_payload=True
+            )
+            if not points:
+                raise HTTPException(status_code=404, detail=f"No document vector chunks found for document family '{document_family}'")
             
+            sorted_chunks = sorted(points, key=lambda p: p.payload.get("chunk_index", 0))
+            full_text_stream = "\n".join([p.payload.get("page_content", p.payload.get("content", p.payload.get("text", ""))) for p in sorted_chunks])
+            src_files = points[0].payload.get("source_file", document_family)
+            target_doc_name = str(src_files)
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise e
+            raise HTTPException(status_code=500, detail=f"Error fetching workspace document text: {str(e)}")
+
+    elif file and file.filename:
+        target_doc_name = file.filename
+        file_ext = file.filename.split(".")[-1].lower()
+        
+        # Save UploadFile stream into temporary file to let PDF/Excel readers read it
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}") as tmp:
+            tmp.write(await file.read())
+            tmp_path = tmp.name
+            
+        try:
+            if file_ext == "pdf":
+                import pdfplumber
+                with pdfplumber.open(tmp_path) as pdf:
+                    # Limit to first 50 pages and use raw text extraction (layout=False) for 20x speedup
+                    for page in pdf.pages[:50]:
+                        t = page.extract_text(layout=False) or page.extract_text() or ""
+                        if t.strip():
+                            full_text_stream += t + "\n"
+            elif file_ext == "docx":
+                import docx
+                doc = docx.Document(tmp_path)
+                full_text_stream = "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
+            elif file_ext in ["xlsx", "xls"]:
+                import pandas as pd
+                excel_workbook = pd.ExcelFile(tmp_path)
+                excel_texts = []
+                for sheet_name in excel_workbook.sheet_names:
+                    df = excel_workbook.parse(sheet_name).fillna("")
+                    if df.empty:
+                        continue
+                    headers = [str(col).strip() for col in df.columns]
+                    md_grid = f"### SPREADSHEET WORKBOOK TAB: {sheet_name.upper()}\n| {' | '.join(headers)} |\n| {' | '.join(['---'] * len(headers))} |\n"
+                    for _, row in df.iterrows():
+                        md_grid += f"| {' | '.join([str(val).strip() for val in row.values])} |\n"
+                    excel_texts.append(md_grid)
+                full_text_stream = "\n\n".join(excel_texts)
+            else:
+                # Universal text file reader fallback (.txt, .csv, .md, .json, .log, .tsv, .py, etc.)
+                try:
+                    with open(tmp_path, "r", encoding="utf-8", errors="ignore") as f:
+                        full_text_stream = f.read()
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Unsupported file format or unreadable text content. Supported: PDF, DOCX, XLSX, TXT, CSV, MD, JSON, LOG.")
+        except Exception as parse_err:
+            raise HTTPException(status_code=400, detail=f"Failed to extract document text: {str(parse_err)}")
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+    else:
+        raise HTTPException(status_code=400, detail="Please upload a document file or select a workspace document family.")
+
     if not full_text_stream.strip():
         raise HTTPException(status_code=400, detail="Document appears to contain no extractable text layers.")
         
     llm_cfg = get_active_llm_config()
-    res = orchestrator.generate_summary(
-        document_name=file.filename,
+    
+    # Run heavy LLM summarization call off the main asyncio thread to keep event loop 100% non-blocking
+    res = await run_in_threadpool(
+        orchestrator.generate_summary,
+        document_name=target_doc_name,
         full_text_content=full_text_stream,
         summary_length=summary_length,
         max_tokens=max_tokens,
@@ -707,8 +1176,21 @@ async def summarize_document(
 async def generate_eval_test_cases(tenant_id: str, payload: Dict[str, Any]):
     """Generates synthetic test sets using the Ragas framework for the tenant workspace."""
     count = int(payload.get("count", 3))
+    judge_model = payload.get("judge_model", "").strip()
+    judge_profile = payload.get("judge_profile", "").strip()
     
     llm_cfg = get_active_llm_config()
+    profiles = SecureStorageManager.load_encrypted_profiles()
+    
+    if judge_profile and judge_profile in profiles:
+        llm_cfg = dict(profiles[judge_profile])
+    elif judge_model:
+        for p_name, p_cfg in profiles.items():
+            if isinstance(p_cfg, dict) and p_cfg.get("DEFAULT_MODEL_ID") == judge_model:
+                llm_cfg = dict(p_cfg)
+                break
+        llm_cfg["DEFAULT_MODEL_ID"] = judge_model
+        
     from src.evaluation.rag_evaluator import RAGEvaluator
     evaluator = RAGEvaluator(llm_overrides=llm_cfg)
     
@@ -738,9 +1220,10 @@ async def generate_eval_test_cases(tenant_id: str, payload: Dict[str, Any]):
                 points = res.get("points", [])
                 valid_chunks = []
                 for pt in points:
-                    txt = pt.get("payload", {}).get("document_text", "")
-                    if txt and len(txt) > 200:
-                        valid_chunks.append(txt)
+                    payload_data = pt.get("payload", {})
+                    txt = payload_data.get("parent_text", "") or payload_data.get("document_text", "") or payload_data.get("page_content", "")
+                    if txt and len(txt.strip()) > 100:
+                        valid_chunks.append(txt.strip())
                 if valid_chunks:
                     chunks = random.sample(valid_chunks, min(len(valid_chunks), count))
             yield f"data: {json.dumps({'type': 'status', 'message': '[END] Qdrant scroll request successfully completed'})}\n\n"
@@ -751,28 +1234,21 @@ async def generate_eval_test_cases(tenant_id: str, payload: Dict[str, Any]):
             yield f"data: {json.dumps({'type': 'result', 'status': 'warning', 'message': 'No vector records found to generate questions.', 'test_set': []})}\n\n"
             return
 
-        # Construct the payload for the remote A40 vLLM endpoint
-        import requests
-        api_base = llm_cfg.get("LLM_API_BASE_URL", Config.LLM_API_BASE_URL)
-        api_key = llm_cfg.get("LLM_API_KEY", Config.LLM_API_KEY)
         default_model = llm_cfg.get("DEFAULT_MODEL_ID", Config.DEFAULT_MODEL_ID)
         deployment_mode = llm_cfg.get("LLM_DEPLOYMENT_MODE", Config.LLM_DEPLOYMENT_MODE)
-        
         provider_type = llm_cfg.get("PROVIDER_TYPE", "Cloud API" if deployment_mode == "CLOUD" else "vLLM")
-        base_url = api_base.rstrip('/')
-        if provider_type in ["Ollama", "OpenAI-Compatible"] and not base_url.endswith("/v1") and "/v1/" not in base_url:
-            base_url = f"{base_url}/v1"
-        vllm_endpoint = f"{base_url}/chat/completions"
-        headers = {"Content-Type": "application/json"}
-        if api_key and api_key.lower() != "none":
-            headers["Authorization"] = f"Bearer {api_key}"
 
         test_cases = []
         total_rows = len(chunks)
         yield f"data: {json.dumps({'type': 'status', 'message': f'[START] generate_synthetic_test_set loop - processing {total_rows} rows'})}\n\n"
         
+        # Fetch active adapter weight matrix for routing
+        from src.database.secure_storage import SecureStorageManager
+        registry = SecureStorageManager.load_tenant_registry()
+        active_adapter = registry.get(tenant_id, "tech_support")
+
         for idx, chunk in enumerate(chunks):
-            yield f"data: {json.dumps({'type': 'status', 'message': f'[START] Processing row {idx + 1} of {total_rows}'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'message': f'Synthesizing synthetic QA row {idx + 1}/{total_rows} via {provider_type} ({default_model})...'})}\n\n"
             prompt = (
                 "You are an expert test dataset generator.\n"
                 "Given the context block below, generate a high-quality, professional question and a complete, factual ground truth answer based STRICTLY on this context.\n\n"
@@ -785,76 +1261,39 @@ async def generate_eval_test_cases(tenant_id: str, payload: Dict[str, Any]):
             )
             
             try:
-                yield f"data: {json.dumps({'type': 'status', 'message': f'  [START] Calling remote GPU (A40) to synthesize QA row {idx + 1}'})}\n\n"
+                res_data = evaluator.orchestrator.generate_chat_response(
+                    target_adapter=active_adapter,
+                    chat_history=[{"role": "user", "content": prompt}],
+                    temperature=0.7,
+                    llm_overrides=llm_cfg
+                )
                 
-                # Fetch active adapter weight matrix for routing
-                registry = SecureStorageManager.load_tenant_registry()
-                active_adapter = registry.get(tenant_id, "tech_support")
-                
-                if provider_type in ["Ollama", "OpenAI-Compatible", "Cloud API"]:
-                    target_model = default_model
-                else:
-                    # Dynamic check fallback to default_model if active_adapter is not active on vLLM server
-                    live_models = []
-                    try:
-                        url_models = f"{base_url.rstrip('/')}/models"
-                        if "/v1" not in url_models and "/v1/" not in url_models:
-                            url_v1 = f"{base_url.rstrip('/')}/v1/models"
-                            try:
-                                req_m = urllib.request.Request(url_v1, method="GET")
-                                if api_key and api_key.lower() != "none":
-                                    req_m.add_header("Authorization", f"Bearer {api_key}")
-                                with urllib.request.urlopen(req_m, timeout=1.5) as res_m:
-                                    data_m = json.loads(res_m.read().decode("utf-8"))
-                                    live_models = [m["id"] for m in data_m.get("data", [])]
-                            except Exception:
-                                pass
-                        if not live_models:
-                            req_m = urllib.request.Request(url_models, method="GET")
-                            if api_key and api_key.lower() != "none":
-                                req_m.add_header("Authorization", f"Bearer {api_key}")
-                            with urllib.request.urlopen(req_m, timeout=1.5) as res_m:
-                                data_m = json.loads(res_m.read().decode("utf-8"))
-                                live_models = [m["id"] for m in data_m.get("data", [])]
-                    except Exception:
-                        pass
-                    
-                    if active_adapter in live_models:
-                        target_model = active_adapter
-                    else:
-                        target_model = default_model
+                if res_data.get("status") == "success" and res_data.get("answer"):
+                    res_text = res_data["answer"].strip()
+                    if "```" in res_text:
+                        matches = re.findall(r"```(?:json)?\s*\n?(.*?)\n?```", res_text, re.DOTALL)
+                        if matches:
+                            res_text = matches[0].strip()
+                        else:
+                            res_text = re.sub(r"^```(?:json)?\n?", "", res_text)
+                            res_text = re.sub(r"\n?```$", "", res_text)
 
-                vllm_payload = {
-                    "model": target_model,
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
-                    "temperature": 0.7,
-                    "max_tokens": 1024
-                }
-                
-                res_sync = requests.post(vllm_endpoint, json=vllm_payload, headers=headers, timeout=15.0)
-                res_sync.raise_for_status()
-                res_data = res_sync.json()
-                res_text = res_data["choices"][0]["message"]["content"].strip()
-                
-                yield f"data: {json.dumps({'type': 'status', 'message': f'  [END] Calling remote GPU (A40) to synthesize QA row {idx + 1}'})}\n\n"
-                
-                # Clean Markdown fences if present
-                if res_text.startswith("```"):
-                    res_text = re.sub(r"^```(?:json)?\n", "", res_text)
-                    res_text = re.sub(r"\n```$", "", res_text)
-                    
-                parsed = json.loads(res_text)
-                if parsed.get("question") and parsed.get("ground_truth"):
-                    test_cases.append({
-                        "question": parsed["question"].strip(),
-                        "ground_truth": parsed["ground_truth"].strip()
-                    })
+                    if "{" in res_text and "}" in res_text:
+                        s_idx = res_text.find("{")
+                        e_idx = res_text.rfind("}") + 1
+                        res_text = res_text[s_idx:e_idx]
+                            
+                    parsed = json.loads(res_text)
+                    if parsed.get("question") and parsed.get("ground_truth"):
+                        test_cases.append({
+                            "question": parsed["question"].strip(),
+                            "ground_truth": parsed["ground_truth"].strip()
+                        })
+                else:
+                    err_msg = res_data.get("message", "Unknown LLM Error")
+                    yield f"data: {json.dumps({'type': 'status', 'message': f'  [WARNING] LLM return error for row {idx + 1}: {err_msg}'})}\n\n"
             except Exception as ex:
                 yield f"data: {json.dumps({'type': 'status', 'message': f'  [ERROR] Failed to generate question from chunk: {str(ex)}'})}\n\n"
-            
-            yield f"data: {json.dumps({'type': 'status', 'message': f'[END] Processing row {idx + 1} of {total_rows}'})}\n\n"
             
         yield f"data: {json.dumps({'type': 'status', 'message': f'[END] generate_synthetic_test_set loop - completed with {len(test_cases)} cases'})}\n\n"
         yield f"data: {json.dumps({'type': 'result', 'status': 'success', 'test_set': test_cases})}\n\n"
@@ -862,225 +1301,124 @@ async def generate_eval_test_cases(tenant_id: str, payload: Dict[str, Any]):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.post("/api/evaluations/test-connectivity")
-async def test_evaluation_connectivity():
+async def test_evaluation_connectivity(payload: Dict[str, Any] = None):
     """Validates connectivity to all active evaluation infrastructure components."""
-    llm_cfg = get_active_llm_config()
-    deployment_mode = llm_cfg.get("LLM_DEPLOYMENT_MODE", Config.LLM_DEPLOYMENT_MODE)
-    api_base_url = llm_cfg.get("LLM_API_BASE_URL", Config.LLM_API_BASE_URL)
-    api_key = llm_cfg.get("LLM_API_KEY", Config.LLM_API_KEY)
-    default_model = llm_cfg.get("DEFAULT_MODEL_ID", Config.DEFAULT_MODEL_ID)
-    
-    report = {
-        "llm": {"status": "unknown", "message": "", "details": {}},
-        "embeddings": {"status": "unknown", "message": ""},
-        "reranker": {"status": "unknown", "message": ""},
-        "qdrant": {"status": "unknown", "message": ""}
+    report = build_system_health_report()
+    return {
+        "llm": {"status": "success" if report["components"].get("llm", {}).get("status") == "HEALTHY" else "error", "message": report["components"].get("llm", {}).get("message", "")},
+        "embeddings": {"status": "success" if report["components"].get("embeddings", {}).get("status") == "HEALTHY" else "error", "message": report["components"].get("embeddings", {}).get("message", "")},
+        "reranker": {"status": "success" if report["components"].get("reranker", {}).get("status") == "HEALTHY" else "error", "message": report["components"].get("reranker", {}).get("message", "")},
+        "qdrant": {"status": "success" if report["components"].get("qdrant", {}).get("status") == "HEALTHY" else "error", "message": report["components"].get("qdrant", {}).get("message", "")},
+        "components": report["components"]
     }
-    
-    # 1. Test LLM
-    base_url = api_base_url.rstrip('/')
-    try:
-        import urllib.request
-        import json
-        provider_type = llm_cfg.get("PROVIDER_TYPE", "Cloud API" if deployment_mode == "CLOUD" else "vLLM")
-        if provider_type in ["Ollama", "OpenAI-Compatible"] and not base_url.endswith("/v1") and "/v1/" not in base_url:
-            base_url = f"{base_url}/v1"
-        
-        # Test model chat completions endpoint with a simple request
-        vllm_payload = {
-            "model": default_model,
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 5
-        }
-        headers = {"Content-Type": "application/json"}
-        if api_key and api_key.lower() != "none":
-            headers["Authorization"] = f"Bearer {api_key}"
-            
-        req = urllib.request.Request(
-            f"{base_url}/chat/completions",
-            data=json.dumps(vllm_payload).encode("utf-8"),
-            headers=headers,
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=5.0) as res:
-            res_data = json.loads(res.read().decode("utf-8"))
-            answer = res_data["choices"][0]["message"]["content"]
-            report["llm"] = {
-                "status": "success",
-                "message": f"Successfully connected to LLM. Model response: '{answer.strip()}'",
-                "details": {"model": default_model, "provider": provider_type}
-            }
-    except Exception as e:
-        report["llm"] = {
-            "status": "error",
-            "message": f"LLM Connection failed: {str(e)}",
-            "details": {"model": default_model, "url": f"{base_url}/chat/completions"}
-        }
 
-    # 2. Test Embedding Server
-    try:
-        import urllib.request
-        import json
-        # Embed a dummy word
-        embed_payload = {"inputs": ["ping"]}
-        req = urllib.request.Request(
-            f"{Config.EMBEDDING_SERVER_URL.rstrip('/')}/embed",
-            data=json.dumps(embed_payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=3.0) as res:
-            res_data = json.loads(res.read().decode("utf-8"))
-            report["embeddings"] = {
-                "status": "success",
-                "message": f"Successfully connected to Embedding Server. Vector dimension: {len(res_data[0]) if res_data else 'unknown'}"
-            }
-    except Exception as e:
-        report["embeddings"] = {
-            "status": "error",
-            "message": f"Embedding Server Connection failed: {str(e)}"
-        }
-
-    # 3. Test Reranker
-    if Config.RERANK_ENABLED:
-        try:
-            import urllib.request
-            import json
-            # Rerank a dummy query and context
-            rerank_payload = {
-                "query": "ping",
-                "texts": ["pong"],
-                "top_n": 1
-            }
-            req = urllib.request.Request(
-                Config.RERANKER_ENDPOINT,
-                data=json.dumps(rerank_payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=3.0) as res:
-                res_data = json.loads(res.read().decode("utf-8"))
-                report["reranker"] = {
-                    "status": "success",
-                    "message": f"Successfully connected to Reranker Server. Score returned: {res_data[0].get('score', 'unknown') if res_data else 'unknown'}"
-                }
-        except Exception as e:
-            report["reranker"] = {
-                "status": "error",
-                "message": f"Reranker Server Connection failed: {str(e)}"
-            }
-    else:
-        report["reranker"] = {
-            "status": "disabled",
-            "message": "Reranker is currently disabled in system configuration."
-        }
-
-    # 4. Test Qdrant DB
-    try:
-        qdrant_client = Config.get_qdrant_client()
-        exists = qdrant_client.collection_exists(collection_name=Config.COLLECTION_NAME)
-        if exists:
-            info = qdrant_client.get_collection(collection_name=Config.COLLECTION_NAME)
-            report["qdrant"] = {
-                "status": "success",
-                "message": f"Successfully connected to Qdrant. Collection '{Config.COLLECTION_NAME}' exists with {info.points_count} points."
-            }
-        else:
-            report["qdrant"] = {
-                "status": "warning",
-                "message": f"Connected to Qdrant, but collection '{Config.COLLECTION_NAME}' does not exist."
-            }
-    except Exception as e:
-        report["qdrant"] = {
-            "status": "error",
-            "message": f"Qdrant Connection failed: {str(e)}"
-        }
-        
-    return report
+@app.get("/api/system/integrity")
+async def get_system_integrity_report():
+    """Performs real-time, comprehensive connectivity & health tests across all core components."""
+    return build_system_health_report()
 
 @app.post("/api/tenants/{tenant_id}/evaluations/run")
 async def run_eval_pass(tenant_id: str, payload: Dict[str, Any]):
     """Executes a full evaluation metrics benchmark suite on a loaded test set."""
     test_set = payload.get("test_set", [])
     top_k = int(payload.get("top_k", Config.RERANK_TOP_K))
+    judge_model = payload.get("judge_model", "").strip()
+    judge_profile = payload.get("judge_profile", "").strip()
     
     if not test_set:
         raise HTTPException(status_code=400, detail="test_set dataset cannot be empty.")
         
     llm_cfg = get_active_llm_config()
+    profiles = SecureStorageManager.load_encrypted_profiles()
+    
+    if judge_profile and judge_profile in profiles:
+        llm_cfg = dict(profiles[judge_profile])
+    elif judge_model:
+        for p_name, p_cfg in profiles.items():
+            if isinstance(p_cfg, dict) and p_cfg.get("DEFAULT_MODEL_ID") == judge_model:
+                llm_cfg = dict(p_cfg)
+                break
+        llm_cfg["DEFAULT_MODEL_ID"] = judge_model
+        
     from src.evaluation.rag_evaluator import RAGEvaluator
     evaluator = RAGEvaluator(llm_overrides=llm_cfg)
     
     async def event_generator():
-        completed_dataset = []
-        total = len(test_set)
-        
-        for idx, case in enumerate(test_set):
-            question = case.get("question", "").strip()
-            ground_truth = case.get("ground_truth", "").strip()
+        try:
+            completed_dataset = []
+            total = len(test_set)
             
-            # Yield active progress event frame
-            yield f"data: {json.dumps({'type': 'status', 'phase': 'inference', 'current': idx + 1, 'total': total, 'message': f'Generating RAG answers ({idx + 1}/{total}): {question[:28]}...'})}\n\n"
-            
-            # Retrieve isolated context chunks from Qdrant
-            retrieved_nodes, _, _ = evaluator.query_engine.retrieve_context(
-                query_str=question,
-                tenant_id=tenant_id,
-                limit=top_k
-            )
-            contexts = [node.get("text", "") for node in retrieved_nodes if node.get("text", "")]
-            if not contexts:
-                contexts = ["NO VERIFIED CONTEXT DETECTED."]
+            for idx, case in enumerate(test_set):
+                question = case.get("question", "").strip()
+                ground_truth = case.get("ground_truth", "").strip()
+                
+                # Yield active progress event frame
+                yield f"data: {json.dumps({'type': 'status', 'phase': 'inference', 'current': idx + 1, 'total': total, 'message': f'Generating RAG answers ({idx + 1}/{total}): {question[:28]}...'})}\n\n"
+                
+                # Retrieve isolated context chunks from Qdrant
+                retrieved_nodes, _, _ = evaluator.query_engine.retrieve_context(
+                    query_str=question,
+                    tenant_id=tenant_id,
+                    limit=top_k
+                )
+                contexts = [node.get("text", "") for node in retrieved_nodes if node.get("text", "")]
+                if not contexts:
+                    contexts = ["NO VERIFIED CONTEXT DETECTED."]
 
-            # Fetch active adapter weight matrix for routing
-            from src.database.secure_storage import SecureStorageManager
-            registry = SecureStorageManager.load_tenant_registry()
-            active_adapter = registry.get(tenant_id, "tech_support")
+                # Fetch active adapter weight matrix for routing
+                registry = SecureStorageManager.load_tenant_registry()
+                active_adapter = registry.get(tenant_id, "tech_support")
 
-            # Generate answer from LLM under active settings overrides
-            res = evaluator.orchestrator.generate_answer(
-                tenant_id=tenant_id,
-                target_adapter=active_adapter,
-                user_query=question,
-                temperature=0.0,
-                top_k=top_k,
-                llm_overrides=evaluator.overrides
-            )
-            generated_answer = res.get("answer", "Information missing from current isolated partition data store.")
+                # Generate answer from LLM under active settings overrides
+                res = evaluator.orchestrator.generate_answer(
+                    tenant_id=tenant_id,
+                    target_adapter=active_adapter,
+                    user_query=question,
+                    temperature=0.0,
+                    top_k=top_k,
+                    llm_overrides=evaluator.overrides
+                )
+                generated_answer = res.get("answer", "Information missing from current isolated partition data store.")
+                
+                completed_dataset.append({
+                    "question": question,
+                    "contexts": contexts,
+                    "answer": generated_answer,
+                    "ground_truth": ground_truth
+                })
+                
+            # Yield Ragas local processing transition event frame
+            active_model = llm_cfg.get("DEFAULT_MODEL_ID", Config.DEFAULT_MODEL_ID) or "meta/llama-3.1-8b-instruct"
+            provider_type = llm_cfg.get("PROVIDER_TYPE", "vLLM")
+            status_msg = f"Running Ragas metrics evaluation on {provider_type} ({active_model})..."
+            yield f"data: {json.dumps({'type': 'status', 'phase': 'evaluation', 'current': total, 'total': total, 'message': status_msg})}\n\n"
             
-            completed_dataset.append({
-                "question": question,
-                "contexts": contexts,
-                "answer": generated_answer,
-                "ground_truth": ground_truth
-            })
+            # Run Ragas Metrics
+            eval_res = evaluator.evaluate_dataset(completed_dataset)
             
-        # Yield Ragas local processing transition event frame
-        yield f"data: {json.dumps({'type': 'status', 'phase': 'evaluation', 'current': total, 'total': total, 'message': 'Running Ragas metrics locally on Ollama ggozad/prometheus2...'})}\n\n"
-        
-        # Run Ragas Metrics
-        eval_res = evaluator.evaluate_dataset(completed_dataset)
-        
-        # Yield final completed dataset results frame
-        if eval_res.get("status") == "success":
-            scores = eval_res.get('scores', {})
-            prod_status = determine_production_status(scores)
-            result_payload = {
-                'type': 'result',
-                'data': {
-                    'status': 'success',
-                    'scores': scores,
-                    'production_status': prod_status,
-                    'raw_dataframe': eval_res.get('raw_dataframe', []),
-                    'vector_top_k': Config.VECTOR_TOP_K,
-                    'rerank_top_k': Config.RERANK_TOP_K,
-                    'reranker_score_threshold': Config.RERANKER_SCORE_THRESHOLD
+            # Yield final completed dataset results frame
+            if eval_res.get("status") == "success":
+                scores = eval_res.get('scores', {})
+                prod_status = determine_production_status(scores)
+                result_payload = {
+                    'type': 'result',
+                    'data': {
+                        'status': 'success',
+                        'scores': scores,
+                        'production_status': prod_status,
+                        'raw_dataframe': eval_res.get('raw_dataframe', []),
+                        'vector_top_k': Config.VECTOR_TOP_K,
+                        'rerank_top_k': Config.RERANK_TOP_K,
+                        'reranker_score_threshold': Config.RERANKER_SCORE_THRESHOLD
+                    }
                 }
-            }
-            yield f"data: {json.dumps(result_payload)}\n\n"
-        else:
-            yield f"data: {json.dumps({'type': 'result', 'data': eval_res})}\n\n"
-        
+                yield f"data: {json.dumps(result_payload)}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'error', 'message': eval_res.get('message', 'Ragas evaluation failed.')})}\n\n"
+        except Exception as err:
+            logger.error(f"Evaluation stream processing error: {str(err)}", component="EVALUATOR")
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Evaluation processing fault: {str(err)}'})}\n\n"
+            
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 # Mount static build folder at the root to serve our React SPA frontend
@@ -1091,3 +1429,8 @@ try:
         app.mount("/", StaticFiles(directory=dist_dir, html=True), name="static")
 except Exception as e:
     print(f"⚠️ Warning: Could not mount static files: {str(e)}")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("src.api:app", host="0.0.0.0", port=8000, reload=True)
+

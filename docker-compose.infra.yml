@@ -1,59 +1,59 @@
 version: '3.8'
 
 services:
+  # --- 1. QDRANT VECTOR DATABASE ---
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: rag-qdrant
+    container_name: enterprise_rag_qdrant
+    restart: unless-stopped
     ports:
-      - "${QDRANT_PORT:-6333}:6333"
+      - "6333:6333"
       - "6334:6334"
     volumes:
-      - ${QDRANT_STORAGE_PATH:-./qdrant_storage}:/qdrant/storage
+      - qdrant_storage:/qdrant/storage
     environment:
-      - QDRANT__SERVICE__ANALYTICS_ENABLED=false
-    restart: unless-stopped
-    networks:
-      - llm-infra-net
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:6333/readyz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  embedding-server:
-    image: ghcr.io/huggingface/text-embeddings-inference:${EMBEDDING_IMAGE_TAG:-cpu-latest}
-    container_name: rag-embedding-server
+  # --- 2. TEI EMBEDDING ENGINE ---
+  tei_embedding:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    container_name: enterprise_rag_tei_embedding
+    restart: unless-stopped
     ports:
       - "8090:80"
     volumes:
-      - ${EMBEDDING_CACHE_PATH:-./embedding_cache}:/data
-    environment:
-      - OMP_NUM_THREADS=${EMBEDDING_NUM_THREADS:-8}
-      - MKL_NUM_THREADS=${EMBEDDING_NUM_THREADS:-8}
-      - HF_HUB_ENABLE_HF_TRANSFER=1
-    command: --model-id BAAI/bge-large-en-v1.5 --port 80
-    restart: unless-stopped
-    networks:
-      - llm-infra-net
+      - hf_cache:/data
+    command: ["--model-id", "BAAI/bge-large-en-v1.5", "--port", "80", "--max-client-batch-size", "32"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
-  reranker-server:
-    image: ghcr.io/huggingface/text-embeddings-inference:${RERANKER_IMAGE_TAG:-cpu-latest}
-    container_name: rag-reranker-server
+  # --- 3. TEI CROSS-ENCODER RERANKER ENGINE ---
+  tei_reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    container_name: enterprise_rag_tei_reranker
+    restart: unless-stopped
     ports:
       - "8081:80"
     volumes:
-      - ${RERANKER_CACHE_PATH:-./reranker_cache}:/data
-    # CPU/GPU Fallback controls:
-    # If utilizing Nvidia GPUs, set RERANKER_IMAGE_TAG=latest in your .env.docker
-    # and uncomment the deploy configurations block below.
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
-    command: --model-id BAAI/bge-reranker-large --port 80
-    restart: unless-stopped
-    networks:
-      - llm-infra-net
+      - hf_cache:/data
+    command: ["--model-id", "BAAI/bge-reranker-large", "--port", "80", "--max-client-batch-size", "32"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
-networks:
-  llm-infra-net:
-    name: llm-infra-net
-    driver: bridge
+volumes:
+  qdrant_storage:
+    driver: local
+  hf_cache:
+    driver: local

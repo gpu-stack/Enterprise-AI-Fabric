@@ -1,9 +1,7 @@
 import hashlib
-import uuid
 import pandas as pd
 from typing import List, Dict, Any
-from qdrant_client import QdrantClient
-from qdrant_client.models import Filter, FieldCondition, MatchValue, FilterSelector
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 from src.config import Config
 from src.processing.layout_parser import LayoutAwareParser
 from src.processing.semantic_splitter import SemanticProcessingEngine
@@ -14,6 +12,33 @@ class TenantIngestionPipeline:
         self.client = Config.get_qdrant_client()
         self.semantic_engine = SemanticProcessingEngine()
         self.last_deprecation_count = 0
+
+    def reset_tenant_collection(self, collection_name: str = None) -> bool:
+        """Initializes or resets Qdrant collection with named dense AND sparse vector configurations."""
+        from qdrant_client import models
+        target_collection = collection_name or Config.COLLECTION_NAME
+        try:
+            self.client.recreate_collection(
+                collection_name=target_collection,
+                vectors_config={
+                    "dense": models.VectorParams(size=Config.VECTOR_DIMENSION, distance=models.Distance.COSINE)
+                },
+                sparse_vectors_config={
+                    "sparse": models.SparseVectorParams(modifier=models.Modifier.IDF)
+                }
+            )
+            try:
+                self.client.create_payload_index(
+                    collection_name=target_collection,
+                    field_name="tenant_id",
+                    field_schema={"type": "keyword", "is_tenant": True}
+                )
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to recreate collection '{target_collection}': {str(e)}")
+            return False
 
     def _check_content_hash_exists(self, content_hash: str) -> bool:
         """Uses the Qdrant SDK to check if a document with the same content hash already exists for this tenant."""
@@ -75,6 +100,88 @@ class TenantIngestionPipeline:
         except Exception as e:
             print(f"⚠️ Warning: Failed to retrieve tenant document families: {str(e)}")
             return []
+
+    def get_tenant_document_details(self) -> List[Dict[str, Any]]:
+        """Retrieves aggregated metadata for all document families under this tenant."""
+        try:
+            offset = None
+            families_map = {}
+            while True:
+                points, offset = self.client.scroll(
+                    collection_name=Config.COLLECTION_NAME,
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(key="tenant_id", match=MatchValue(value=self.tenant_id))
+                        ]
+                    ),
+                    limit=1000,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                for pt in points:
+                    payload = pt.payload or {}
+                    fam = payload.get("document_family") or "unassigned_family"
+                    if fam not in families_map:
+                        families_map[fam] = {
+                            "document_family": fam,
+                            "latest_version": payload.get("document_version", "1.0"),
+                            "total_chunks": 0,
+                            "total_words": 0,
+                            "ingested_at": payload.get("ingested_at") or "",
+                            "source_files": set(),
+                            "is_latest": payload.get("is_latest", True)
+                        }
+                    item = families_map[fam]
+                    item["total_chunks"] += 1
+                    item["total_words"] += payload.get("word_count", len(payload.get("page_content", "").split()))
+                    if payload.get("source_file"):
+                        item["source_files"].add(payload.get("source_file"))
+                    if payload.get("is_latest"):
+                        item["is_latest"] = True
+                        if payload.get("document_version"):
+                            item["latest_version"] = payload.get("document_version")
+                    if payload.get("ingested_at") and not item["ingested_at"]:
+                        item["ingested_at"] = payload.get("ingested_at")
+
+                if offset is None:
+                    break
+
+            result = []
+            for fam, data in families_map.items():
+                data["source_files"] = list(data["source_files"])
+                result.append(data)
+            return sorted(result, key=lambda x: x["document_family"])
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to retrieve tenant document details: {str(e)}")
+            return []
+
+    def delete_document_family(self, document_family: str) -> int:
+        """Deletes all chunks belonging to a document family under this tenant."""
+        try:
+            points, _ = self.client.scroll(
+                collection_name=Config.COLLECTION_NAME,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(key="tenant_id", match=MatchValue(value=self.tenant_id)),
+                        FieldCondition(key="document_family", match=MatchValue(value=document_family))
+                    ]
+                ),
+                limit=10000,
+                with_payload=False,
+                with_vectors=False
+            )
+            if points:
+                point_ids = [pt.id for pt in points]
+                self.client.delete(
+                    collection_name=Config.COLLECTION_NAME,
+                    points_selector=point_ids
+                )
+                return len(point_ids)
+            return 0
+        except Exception as e:
+            print(f"⚠️ Failed to delete document family '{document_family}': {str(e)}")
+            return 0
 
     def _deprecate_existing_versions(self, document_family: str):
         """Finds all active chunks for this family and tenant, and flips their is_latest flag to False using pagination."""

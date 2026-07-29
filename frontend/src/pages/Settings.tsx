@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Shield, Sliders, Cpu, AlertTriangle, XCircle, CheckCircle, Trash2, Server, RefreshCw } from "lucide-react";
 import { useAppLogic } from "../useAppLogic";
 
@@ -26,6 +26,8 @@ export const Settings = () => {
     setFileConfigs,
     isIngesting,
     setIsIngesting,
+    activeJobs,
+    setActiveJobs,
     ingestProgress,
     setIngestProgress,
     ingestStatusText,
@@ -172,6 +174,143 @@ export const Settings = () => {
 
   const [activeSettingsTab, setActiveSettingsTab] = useState('workspaces');
 
+  const [promptTenant, setPromptTenant] = useState<string>(currentTenant || 'hr_support_v2');
+  const [activePromptText, setActivePromptText] = useState<string>('');
+  const [promptNote, setPromptNote] = useState<string>('');
+  const [promptRecord, setPromptRecord] = useState<any>(null);
+  const [isPromptLoading, setIsPromptLoading] = useState<boolean>(false);
+  const [promptMsg, setPromptMsg] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const [editingNoteKey, setEditingNoteKey] = useState<string | null>(null);
+  const [editingNoteText, setEditingNoteText] = useState<string>('');
+
+  const fetchTenantPrompt = async (tenantId: string) => {
+    if (!tenantId) return;
+    setIsPromptLoading(true);
+    try {
+      const res = await fetch(`/api/tenants/${tenantId}/prompt`);
+      const data = await res.json();
+      setPromptRecord(data);
+      setActivePromptText(data.current_prompt || '');
+    } catch (e) {
+      console.error("Failed to fetch tenant prompt", e);
+    } finally {
+      setIsPromptLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (promptTenant) {
+      fetchTenantPrompt(promptTenant);
+    }
+  }, [promptTenant]);
+
+  const handleSavePrompt = async () => {
+    if (!promptTenant || !activePromptText.trim()) return;
+    setPromptMsg(null);
+    try {
+      const res = await fetch(`/api/tenants/${promptTenant}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ system_prompt: activePromptText, note: promptNote })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPromptRecord(data);
+        setActivePromptText(data.current_prompt || '');
+        setPromptNote('');
+        setPromptMsg({ message: `Successfully deployed new prompt version (${data.version || 'v2.0'}) for tenant '${promptTenant}'.`, type: 'success' });
+      } else {
+        setPromptMsg({ message: data.detail || 'Failed to update prompt.', type: 'error' });
+      }
+    } catch (e: any) {
+      setPromptMsg({ message: e.message || 'Error saving prompt.', type: 'error' });
+    }
+  };
+
+  const handleRollbackPrompt = async (version: string, updatedAt?: string) => {
+    if (!confirm(`Are you sure you want to rollback tenant '${promptTenant}' system prompt to version ${version}?`)) return;
+    setPromptMsg(null);
+    try {
+      const res = await fetch(`/api/tenants/${promptTenant}/prompt/rollback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ version, updated_at: updatedAt })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPromptRecord(data);
+        setActivePromptText(data.current_prompt || '');
+        setPromptMsg({ message: `Successfully rolled back system prompt to version ${version}.`, type: 'success' });
+      } else {
+        setPromptMsg({ message: data.detail || 'Rollback failed.', type: 'error' });
+      }
+    } catch (e: any) {
+      setPromptMsg({ message: e.message || 'Error rolling back prompt.', type: 'error' });
+    }
+  };
+
+  const handleDeletePromptHistory = async (version: string, updatedAt?: string) => {
+    if (!confirm(`Are you sure you want to delete history entry for version ${version}?`)) return;
+    setPromptMsg(null);
+    try {
+      const queryParams = new URLSearchParams();
+      queryParams.append('version', version);
+      if (updatedAt) queryParams.append('updated_at', updatedAt);
+
+      const res = await fetch(`/api/tenants/${promptTenant}/prompt/history?${queryParams.toString()}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPromptRecord(data);
+        setPromptMsg({ message: `Successfully deleted history entry for version ${version}.`, type: 'success' });
+      } else {
+        setPromptMsg({ message: data.detail || 'Delete failed.', type: 'error' });
+      }
+    } catch (e: any) {
+      setPromptMsg({ message: e.message || 'Error deleting history entry.', type: 'error' });
+    }
+  };
+
+  const handleSaveHistoryNote = async (version: string, updatedAt?: string) => {
+    setPromptMsg(null);
+    try {
+      const res = await fetch(`/api/tenants/${promptTenant}/prompt/history/note`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ version, updated_at: updatedAt, note: editingNoteText })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPromptRecord(data);
+        setEditingNoteKey(null);
+        setEditingNoteText('');
+        setPromptMsg({ message: `Successfully updated comment for version ${version}.`, type: 'success' });
+      } else {
+        setPromptMsg({ message: data.detail || 'Note update failed.', type: 'error' });
+      }
+    } catch (e: any) {
+      setPromptMsg({ message: e.message || 'Error updating note.', type: 'error' });
+    }
+  };
+
+  const [integrityData, setIntegrityData] = useState<any>(null);
+  const [isTestingIntegrity, setIsTestingIntegrity] = useState<boolean>(false);
+
+  const runIntegrityCheck = async () => {
+    setIsTestingIntegrity(true);
+    try {
+      const res = await fetch('/api/system/integrity');
+      const data = await res.json();
+      setIntegrityData(data);
+    } catch (e: any) {
+      console.error("Integrity check failed:", e);
+    } finally {
+      setIsTestingIntegrity(false);
+    }
+  };
+
   const tabStyle = (tabName) => ({
     padding: '0.75rem 1.5rem',
     cursor: 'pointer',
@@ -188,10 +327,82 @@ export const Settings = () => {
 
   return (
     <div className="page-content">
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
-        <Sliders size={28} color="var(--accent)" />
-        <h2 style={{ margin: 0 }}>System Settings</h2>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <Sliders size={28} color="var(--accent)" />
+          <h2 style={{ margin: 0 }}>System Settings</h2>
+        </div>
+
+        <button
+          className="btn btn-primary"
+          onClick={runIntegrityCheck}
+          disabled={isTestingIntegrity}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700 }}
+        >
+          <RefreshCw size={16} className={isTestingIntegrity ? 'spin' : ''} />
+          {isTestingIntegrity ? 'Testing All Endpoints...' : '⚡ Run System Integrity Check'}
+        </button>
       </div>
+
+      {/* System Integrity & Connectivity Diagnostic Panel */}
+      {integrityData && (
+        <div style={{
+          marginBottom: '2rem', padding: '1.25rem', borderRadius: '12px',
+          border: `1px solid ${integrityData.overall_status === 'HEALTHY' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+          backgroundColor: integrityData.overall_status === 'HEALTHY' ? 'rgba(16, 185, 129, 0.05)' : 'rgba(239, 68, 68, 0.05)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Shield size={20} color={integrityData.overall_status === 'HEALTHY' ? '#10b981' : '#ef4444'} />
+              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>
+                System Architecture Integrity Report
+              </h3>
+              <span style={{
+                padding: '0.2rem 0.6rem', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 800,
+                backgroundColor: integrityData.overall_status === 'HEALTHY' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                color: integrityData.overall_status === 'HEALTHY' ? '#10b981' : '#ef4444'
+              }}>
+                {integrityData.overall_status}
+              </span>
+            </div>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              Active Profile: <strong>{integrityData.active_profile}</strong> | Tested: {new Date(integrityData.timestamp).toLocaleTimeString()}
+            </span>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.85rem' }}>
+            {Object.values(integrityData.components || {}).map((comp: any, idx: number) => {
+              const isOk = comp.status === 'HEALTHY';
+              const isDisabled = comp.status === 'DISABLED';
+              const badgeColor = isOk ? '#10b981' : (isDisabled ? '#6b7280' : '#ef4444');
+              const bgColor = isOk ? 'rgba(16, 185, 129, 0.08)' : (isDisabled ? 'rgba(107, 114, 128, 0.08)' : 'rgba(239, 68, 68, 0.08)');
+
+              return (
+                <div key={idx} style={{
+                  padding: '0.85rem', borderRadius: '8px', border: `1px solid ${badgeColor}33`,
+                  backgroundColor: bgColor, display: 'flex', flexDirection: 'column', gap: '0.35rem'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontWeight: 700, fontSize: '0.88rem' }}>{comp.name}</span>
+                    <span style={{
+                      padding: '0.15rem 0.5rem', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 800,
+                      backgroundColor: `${badgeColor}22`, color: badgeColor
+                    }}>
+                      {comp.status} ({comp.latency_ms}ms)
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.74rem', fontFamily: 'monospace', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {comp.url}
+                  </div>
+                  <div style={{ fontSize: '0.76rem', color: 'var(--text-primary)', marginTop: '0.15rem' }}>
+                    {comp.message}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Tabs Navigation */}
       <div style={{ display: 'flex', gap: '1rem', borderBottom: '1px solid var(--border-color)', marginBottom: '2rem' }}>
@@ -303,6 +514,175 @@ export const Settings = () => {
                         </div>
                       </div>
                     </div>
+                  </div>
+
+                  {/* TENANT SYSTEM PROMPT REGISTRY & VERSION LINEAGE */}
+                  <div style={{ marginTop: '2.5rem', backgroundColor: 'var(--bg-secondary)', padding: '1.5rem', borderRadius: '12px', border: '1px solid var(--border-color)', boxShadow: 'var(--card-shadow)' }}>
+                    <h3 style={{ margin: '0 0 0.5rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      📝 Tenant System Prompt & Behavior Registry
+                    </h3>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 1.25rem 0' }}>
+                      Configure custom system prompt instructions governing domain tone, output format rules, and grounding constraints for each workspace scope.
+                    </p>
+
+                    {promptMsg && (
+                      <div className={`status-msg-box status-msg-${promptMsg.type}`} style={{ marginBottom: '1.25rem' }}>
+                        {promptMsg.message}
+                      </div>
+                    )}
+
+                    <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                      <label className="form-label">Select Target Workspace Scope</label>
+                      <select 
+                        className="tenant-select" 
+                        value={promptTenant} 
+                        onChange={(e) => setPromptTenant(e.target.value)}
+                        style={{ maxWidth: '320px' }}
+                      >
+                        {(tenants || []).map((t: any) => {
+                          const tid = typeof t === 'string' ? t : t.tenant_id || t.id;
+                          return <option key={tid} value={tid}>{tid.toUpperCase()}</option>;
+                        })}
+                      </select>
+                    </div>
+
+                    <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                        <label className="form-label" style={{ margin: 0 }}>Active System Prompt Instructions</label>
+                        <span className="trace-badge trace-badge-accent">Active Version: {promptRecord?.version || 'v1.0'}</span>
+                      </div>
+                      <textarea 
+                        className="form-input" 
+                        rows={12} 
+                        value={activePromptText}
+                        onChange={(e) => setActivePromptText(e.target.value)}
+                        placeholder="Enter system prompt instructions for this workspace scope..."
+                        style={{ fontFamily: 'monospace', fontSize: '0.85rem', lineHeight: '1.4' }}
+                      />
+                    </div>
+
+                    <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                      <label className="form-label">Revision Note / Comment (Optional)</label>
+                      <input 
+                        type="text"
+                        className="form-input" 
+                        value={promptNote}
+                        onChange={(e) => setPromptNote(e.target.value)}
+                        placeholder="e.g. Optimized for HR compliance rules, tested with Ragas"
+                        style={{ fontSize: '0.85rem' }}
+                      />
+                    </div>
+
+                    <button 
+                      className="btn btn-primary" 
+                      onClick={handleSavePrompt}
+                      disabled={isPromptLoading || !activePromptText.trim()}
+                      style={{ padding: '0.6rem 1.5rem', marginBottom: '2rem' }}
+                    >
+                      {isPromptLoading ? 'Deploying...' : '💾 Save & Deploy New Prompt Version'}
+                    </button>
+
+                    {/* Prompt Lineage History Table */}
+                    <h4 style={{ fontSize: '0.95rem', fontWeight: 800, marginBottom: '0.75rem' }}>
+                      📜 System Prompt Revision History & Lineage
+                    </h4>
+                    
+                    {promptRecord?.history && promptRecord.history.length > 0 ? (
+                      <div style={{ border: '1px solid var(--border-color)', borderRadius: '8px', overflowX: 'auto', backgroundColor: 'var(--bg-primary)' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
+                          <thead>
+                            <tr style={{ borderBottom: '2px solid var(--border-color)', backgroundColor: 'rgba(0,0,0,0.03)' }}>
+                              <th style={{ padding: '0.65rem 1rem' }}>Version</th>
+                              <th style={{ padding: '0.65rem 1rem' }}>Updated Timestamp</th>
+                              <th style={{ padding: '0.65rem 1rem' }}>System Prompt Snippet</th>
+                              <th style={{ padding: '0.65rem 1rem' }}>Note / Comment</th>
+                              <th style={{ padding: '0.65rem 1rem', textAlign: 'right' }}>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {promptRecord.history.map((h: any, idx: number) => {
+                              const rowKey = `${h.version}_${h.updated_at || idx}`;
+                              const isEditing = editingNoteKey === rowKey;
+                              return (
+                                <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                  <td style={{ padding: '0.65rem 1rem', fontWeight: 700 }}>{h.version}</td>
+                                  <td style={{ padding: '0.65rem 1rem', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                                    {h.updated_at ? new Date(h.updated_at).toLocaleString() : 'N/A'}
+                                  </td>
+                                  <td style={{ padding: '0.65rem 1rem', fontFamily: 'monospace', fontSize: '0.75rem', maxWidth: '260px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={h.prompt}>
+                                    {h.prompt}
+                                  </td>
+                                  <td style={{ padding: '0.65rem 1rem', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                                    {isEditing ? (
+                                      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                                        <input 
+                                          type="text" 
+                                          className="form-input"
+                                          value={editingNoteText}
+                                          onChange={(e) => setEditingNoteText(e.target.value)}
+                                          style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem' }}
+                                        />
+                                        <button 
+                                          className="btn btn-primary" 
+                                          onClick={() => handleSaveHistoryNote(h.version, h.updated_at)}
+                                          style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                                        >
+                                          Save
+                                        </button>
+                                        <button 
+                                          className="btn btn-outline" 
+                                          onClick={() => setEditingNoteKey(null)}
+                                          style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        <span>{h.note || 'Archived version'}</span>
+                                        <button 
+                                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: '0.75rem', padding: 0 }}
+                                          title="Edit Comment"
+                                          onClick={() => {
+                                            setEditingNoteKey(rowKey);
+                                            setEditingNoteText(h.note || '');
+                                          }}
+                                        >
+                                          ✏️
+                                        </button>
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td style={{ padding: '0.65rem 1rem', textAlign: 'right' }}>
+                                    <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
+                                      <button 
+                                        className="btn btn-outline"
+                                        onClick={() => handleRollbackPrompt(h.version, h.updated_at)}
+                                        style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
+                                      >
+                                        ↺ Revert
+                                      </button>
+                                      <button 
+                                        className="btn btn-danger"
+                                        onClick={() => handleDeletePromptHistory(h.version, h.updated_at)}
+                                        style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
+                                        title="Delete this history entry"
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', italic: true }}>
+                        No prior prompt revisions archived for this workspace. Saving a new prompt will log its revision lineage here.
+                      </div>
+                    )}
                   </div>
                 </div>
           </div>
@@ -610,8 +990,8 @@ export const Settings = () => {
               <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>Qdrant Vector DB</div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
                 Status: <strong style={{ color: isQdrantOnline ? '#10b981' : '#ef4444' }}>{isQdrantOnline ? 'ONLINE' : 'OFFLINE'}</strong>
-                {health?.nodes?.qdrant?.points_count !== undefined && (
-                  <span style={{ marginLeft: '0.75rem' }}>Vectors: <strong>{health.nodes.qdrant.points_count.toLocaleString()}</strong></span>
+                {(health?.components?.qdrant?.points_count !== undefined || health?.nodes?.qdrant?.points_count !== undefined) && (
+                  <span style={{ marginLeft: '0.75rem' }}>Vectors: <strong>{(health?.components?.qdrant?.points_count ?? health?.nodes?.qdrant?.points_count ?? 0).toLocaleString()}</strong></span>
                 )}
               </div>
             </div>

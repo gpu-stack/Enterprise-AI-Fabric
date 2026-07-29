@@ -1,8 +1,7 @@
 import os
-import asyncio
 from celery import Celery
-from src.config import settings
 from src.processing.ingest_pipeline import TenantIngestionPipeline
+from src.utils.logger import logger
 
 redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
@@ -30,6 +29,11 @@ def async_ingest_file(self, tenant_id: str, file_path: str, filename: str, custo
         self.update_state(state='PROGRESS', meta={'status': status, 'progress': fraction})
 
     try:
+        from src.api import get_active_llm_config
+        from src.config import Config
+        active_cfg = get_active_llm_config()
+        Config.apply_runtime_overrides(active_cfg)
+
         pipeline = TenantIngestionPipeline(tenant_id=tenant_id)
         
         # We assume file_source is a path because Celery cannot serialize file streams
@@ -49,6 +53,12 @@ def async_ingest_file(self, tenant_id: str, file_path: str, filename: str, custo
         if os.path.exists(file_path):
             os.remove(file_path)
             
+        logger.info(
+            f"Successfully ingested file '{filename}' for workspace '{tenant_id}' (status: {status}).",
+            component="INGESTION",
+            tenant_id=tenant_id
+        )
+
         return {
             "status": "success",
             "ingest_status": status,
@@ -56,6 +66,11 @@ def async_ingest_file(self, tenant_id: str, file_path: str, filename: str, custo
             "family_key": custom_family_key
         }
     except Exception as e:
+        logger.error(
+            f"Ingestion task fault for file '{filename}' (workspace: '{tenant_id}'): {str(e)}",
+            component="INGESTION",
+            tenant_id=tenant_id
+        )
         # If we haven't exhausted our retries, retry the task.
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=5)
@@ -64,3 +79,4 @@ def async_ingest_file(self, tenant_id: str, file_path: str, filename: str, custo
         if os.path.exists(file_path):
             os.remove(file_path)
         raise e
+

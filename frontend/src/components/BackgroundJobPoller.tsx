@@ -62,10 +62,13 @@ export const BackgroundJobPoller: React.FC = () => {
           status: hasErrors ? 'Completed with errors' : 'Success'
         });
         
-        const vPerSec = Math.round(320 / (0.75 * (updatedJobs.length || 1)));
+        const fileCount = updatedJobs.length || 1;
+        const qdrantVelocity = Math.round(320 / (0.75 * fileCount));
+        const vectorsPerMin = qdrantVelocity * 60;
+
         setIngestionHistory((prev: any[]) => [...(prev || []), {
            name: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-           Vectors: vPerSec * 60
+           Vectors: vectorsPerMin
         }]);
 
         setActiveJobs([]);

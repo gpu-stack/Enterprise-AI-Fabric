@@ -1,6 +1,5 @@
 import re
 import json
-import time
 import urllib.request
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -10,7 +9,6 @@ from datasets import Dataset
 from ragas import evaluate
 from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
 from langchain_community.chat_models import ChatOllama
-from langchain_community.embeddings import OllamaEmbeddings
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage
 from langchain_core.embeddings import Embeddings
@@ -18,6 +16,7 @@ from src.processing.semantic_splitter import TEIEmbeddingClient
 from src.database.query_engine import MultiTenantQueryEngine
 from src.generation.orchestrator import ContextOrchestrator
 from src.config import settings
+from src.utils.logger import logger as sys_logger
 
 class Prometheus2ChatOllama(ChatOllama):
     """Custom ChatOllama subclass that intercepts and converts Prometheus 2 outputs to expected Ragas schemas."""
@@ -108,16 +107,24 @@ class RAGEvaluator:
         self.api_key = self.overrides.get("LLM_API_KEY", settings.LLM_API_KEY)
         self.default_model = self.overrides.get("DEFAULT_MODEL_ID", settings.DEFAULT_MODEL_ID)
 
+        model_name = self.default_model
+        if "generativelanguage.googleapis.com" in self.api_base_url and not model_name.startswith("models/"):
+            model_name = f"models/{model_name}"
+
         eval_api_key = self.api_key if (self.api_key and self.api_key.lower() != "none") else "dummy_key"
 
         self.eval_llm = ChatOpenAI(
-            model=self.default_model,
+            model=model_name,
             openai_api_key=eval_api_key,
             openai_api_base=self.api_base_url,
-            temperature=0.0
+            temperature=0.0,
+            request_timeout=120.0,
+            max_retries=3,
+            n=1
         )
 
-        tei_client = TEIEmbeddingClient(settings.EMBEDDING_API_URL)
+        embedding_url = self.overrides.get("EMBEDDING_SERVER_URL") or getattr(settings, "EMBEDDING_SERVER_URL", settings.EMBEDDING_API_URL)
+        tei_client = TEIEmbeddingClient(embedding_url)
         self.eval_embeddings = RagasTEIEmbeddings(tei_client)
 
         self.query_engine = MultiTenantQueryEngine()
@@ -180,6 +187,7 @@ class RAGEvaluator:
             return {"status": "error", "message": "No test cases provided for evaluation."}
 
         try:
+            sys_logger.info(f"Executing Ragas benchmark on {len(rag_data)} test cases via Judge Model '{self.default_model}'", component="EVALUATOR")
             formatted_data = {
                 "question": [item["question"] for item in rag_data],
                 "contexts": [item["contexts"] for item in rag_data],
@@ -194,6 +202,11 @@ class RAGEvaluator:
                 max_workers=1 # Forces flat worker load bounds to maintain local VRAM queues safely
             )
             metrics_list = [faithfulness, answer_relevancy, context_precision, context_recall]
+            for m in metrics_list:
+                if hasattr(m, 'strictness'):
+                    m.strictness = 1
+                if hasattr(m, 'n'):
+                    m.n = 1
             
             evaluation_result = evaluate(
                 dataset=dataset,
@@ -218,6 +231,12 @@ class RAGEvaluator:
                 if math.isnan(scores[key]):
                     scores[key] = 0.0
 
+            sys_logger.success(
+                f"Ragas evaluation completed: Faithfulness={scores['faithfulness']:.2f}, Relevance={scores['answer_relevance']:.2f}, Precision={scores['context_precision']:.2f}, Recall={scores['context_recall']:.2f}",
+                component="EVALUATOR",
+                details={"scores": scores}
+            )
+
             return {
                 "status": "success",
                 "scores": scores,
@@ -225,6 +244,7 @@ class RAGEvaluator:
             }
             
         except Exception as e:
+            sys_logger.error(f"Ragas evaluation engine fault: {str(e)}", component="EVALUATOR", exception=e)
             return {"status": "error", "message": f"Ragas evaluation engine fault: {str(e)}"}
 
     def generate_synthetic_test_set(self, tenant_id: str, count: int = 5) -> List[Dict[str, str]]:

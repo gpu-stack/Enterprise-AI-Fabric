@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { 
   Shield, UploadCloud, Cpu, Server, Sun, Moon, 
-  FileText, BarChart2, Sliders, Activity, Menu, X
+  FileText, BarChart2, Sliders, Activity, Menu, X, FolderOpen
 } from 'lucide-react';
 import './App.css';
 import { useAppLogic } from './useAppLogic';
@@ -16,6 +16,8 @@ import { Ingestion } from './pages/Ingestion';
 import { Evaluation } from './pages/Evaluation';
 import { Settings } from './pages/Settings';
 import { Analytics } from './pages/Analytics';
+import { DocumentLibrary } from './pages/DocumentLibrary';
+import { LogsConsole } from './pages/LogsConsole';
 import { BackgroundJobPoller } from './components/BackgroundJobPoller';
 
 // ─────────────────────────────────────────────────────────────
@@ -226,6 +228,14 @@ const AppLayout = () => {
   } = useAppLogic();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [currentTime, setCurrentTime] = useState<string>(new Date().toLocaleString());
+
+  useEffect(() => {
+    const clockInterval = setInterval(() => {
+      setCurrentTime(new Date().toLocaleString());
+    }, 1000);
+    return () => clearInterval(clockInterval);
+  }, []);
 
   useEffect(() => {
     fetchHealth();
@@ -325,6 +335,9 @@ const AppLayout = () => {
           <NavLink to="/ingestion" className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}>
             <UploadCloud size={16} /> Ingestion Pipeline
           </NavLink>
+          <NavLink to="/documents" className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}>
+            <FolderOpen size={16} /> Document Library
+          </NavLink>
           <NavLink to="/eval" className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}>
             <BarChart2 size={16} /> Ragas Evaluation
           </NavLink>
@@ -336,20 +349,26 @@ const AppLayout = () => {
           <NavLink to="/settings" className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}>
             <Sliders size={16} /> System Settings
           </NavLink>
+          <NavLink to="/logs" className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}>
+            <Activity size={16} /> Live Observability & SLA
+          </NavLink>
         </div>
 
-        <div className="sidebar-footer">
-          <div className="system-health-indicator">
-            <div className={`health-dot ${health?.status === 'HEALTHY' ? 'healthy' : 'degraded'}`} />
-            <span>{health?.status === 'HEALTHY' ? 'All Systems Operational' : 'Systems Degraded'}</span>
+        <div className="sidebar-footer" style={{ padding: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 'auto' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 700, color: 'var(--text-primary)', fontSize: '0.82rem' }}>
+              <Shield size={14} color="var(--accent)" /> App Version 2.0
+            </div>
+            <div style={{ fontSize: '0.68rem', opacity: 0.85, fontFamily: 'monospace' }}>{currentTime}</div>
           </div>
           
           <button 
             className="theme-toggle-btn" 
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+            style={{ padding: '0.4rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', cursor: 'pointer', color: 'var(--text-primary)' }}
           >
-            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
           </button>
         </div>
       </nav>
@@ -370,9 +389,11 @@ const AppLayout = () => {
           <Route path="/chat" element={<ErrorBoundary label="Chat"><Chat /></ErrorBoundary>} />
           <Route path="/summarize" element={<ErrorBoundary label="Summarize"><Summarize /></ErrorBoundary>} />
           <Route path="/ingestion" element={<ErrorBoundary label="Ingestion"><Ingestion /></ErrorBoundary>} />
+          <Route path="/documents" element={<ErrorBoundary label="Document Library"><DocumentLibrary /></ErrorBoundary>} />
           <Route path="/eval" element={<ErrorBoundary label="Evaluation"><Evaluation /></ErrorBoundary>} />
           <Route path="/settings" element={<ErrorBoundary label="System Settings"><Settings /></ErrorBoundary>} />
           <Route path="/analytics" element={<ErrorBoundary label="Analytics"><Analytics /></ErrorBoundary>} />
+          <Route path="/logs" element={<ErrorBoundary label="System Audit & Logs"><LogsConsole /></ErrorBoundary>} />
           <Route path="*" element={<Navigate to="/query" replace />} />
         </Routes>
       </main>

@@ -36,3 +36,6 @@ uploads/
 
 # Run state database
 eval_runs.json
+tenant_prompts.json
+test_doc.docx
+load_test_docs/

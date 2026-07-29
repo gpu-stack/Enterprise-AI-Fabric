@@ -27,6 +27,8 @@ export const Query = () => {
     setFileConfigs,
     isIngesting,
     setIsIngesting,
+    activeJobs,
+    setActiveJobs,
     ingestProgress,
     setIngestProgress,
     ingestStatusText,
@@ -450,8 +452,18 @@ export const Query = () => {
                               <div style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>Page: {c.page}</div>
                               <div className="trace-badge-row">
                                 <span className="trace-badge trace-badge-accent">Score: {c.score.toFixed(4)}</span>
+                                <span 
+                                  className="trace-badge" 
+                                  style={{ 
+                                    backgroundColor: c.quality_badge === 'HIGH_CONFIDENCE' ? '#059669' : c.quality_badge === 'MEDIUM_CONFIDENCE' ? '#d97706' : c.quality_badge === 'LOW_CONFIDENCE' ? '#2563eb' : '#dc2626', 
+                                    color: '#ffffff', 
+                                    fontWeight: 600 
+                                  }}
+                                >
+                                  🏷️ {c.badge_label || (c.score >= 0.50 ? 'High Confidence' : 'Medium Confidence')}
+                                </span>
                                 <span className="trace-badge">Rank: #{cIdx + 1}</span>
-                                <span className="trace-badge">{currentTenant.toUpperCase()}</span>
+                                <span className="trace-badge">{(currentTenant || '').toUpperCase()}</span>
                               </div>
                             </div>
                           ))

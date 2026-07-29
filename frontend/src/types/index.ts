@@ -34,6 +34,9 @@ export interface Citation {
   source: string;
   page: string | number;
   score: number;
+  quality_badge?: string;
+  badge_label?: string;
+  badge_class?: string;
 }
 
 export interface QueryResponse {
@@ -52,6 +55,9 @@ export interface QueryResponse {
     source: string;
     page: string | number;
     score: number;
+    quality_badge?: string;
+    badge_label?: string;
+    badge_class?: string;
     text: string;
     selected: boolean;
   }>;

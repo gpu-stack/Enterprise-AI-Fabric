@@ -16,6 +16,16 @@ __pycache__/
 model_profiles.enc
 tenant_registry.json
 
+# Application runtime database & logs (do not bake into docker image)
+app_data/*.db
+app_data/*.db-wal
+app_data/*.db-shm
+app_data/*.jsonl
+app_data/logs/
+app_data/observability.db
+app_data/audit_vault.jsonl
+uploads/
+
 # Local persistent database & cache mount data
 qdrant_storage/
 embedding_cache/

@@ -1,7 +1,6 @@
 // @ts-nocheck
-
-import React from 'react';
-import { ChevronDown, ChevronRight, RefreshCw, Trash2, XCircle, AlertTriangle, CheckCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ChevronDown, ChevronRight, RefreshCw, Trash2, XCircle, AlertTriangle, CheckCircle, Sliders } from 'lucide-react';
 import { useAppLogic } from '../useAppLogic';
 
 export const Evaluation = () => {
@@ -26,6 +25,8 @@ export const Evaluation = () => {
     setFileConfigs,
     isIngesting,
     setIsIngesting,
+    activeJobs,
+    setActiveJobs,
     ingestProgress,
     setIngestProgress,
     ingestStatusText,
@@ -92,6 +93,8 @@ export const Evaluation = () => {
     setEvalSource,
     evalCount,
     setEvalCount,
+    selectedJudgeModel,
+    setSelectedJudgeModel,
     testCases,
     setTestCases,
     isTestCaseLoading,
@@ -140,6 +143,7 @@ export const Evaluation = () => {
     fetchEvalRuns,
     handleDeleteEvalRun,
     handleActivateProfile,
+    handleActivateJudgeModel,
     handleOnboardProfile,
     handleSaveDownstreamSettings,
     handleDeleteProfile,
@@ -166,6 +170,28 @@ export const Evaluation = () => {
     getRerankerLabel
   } = useAppLogic();
 
+  const [selectedCompareIds, setSelectedCompareIds] = useState<string[]>([]);
+  const [isCompareModalOpen, setIsCompareModalOpen] = useState<boolean>(false);
+  const [selectedJudgeProfile, setSelectedJudgeProfile] = useState<string>('');
+
+  useEffect(() => {
+    if (activeProfileName && !selectedJudgeProfile) {
+      setSelectedJudgeProfile(activeProfileName);
+    }
+  }, [activeProfileName]);
+
+  const toggleCompareRun = (runId: string) => {
+    if (selectedCompareIds.includes(runId)) {
+      setSelectedCompareIds(selectedCompareIds.filter(id => id !== runId));
+    } else {
+      if (selectedCompareIds.length >= 2) {
+        setSelectedCompareIds([selectedCompareIds[1], runId]);
+      } else {
+        setSelectedCompareIds([...selectedCompareIds, runId]);
+      }
+    }
+  };
+
   return (
     <div>
       {!currentTenant ? (
@@ -180,7 +206,7 @@ export const Evaluation = () => {
                         This module utilizes the Ragas framework to audit RAG quality metrics. It retrieves context blocks, generates responses, and instructs an LLM-as-a-judge to evaluate faithfulness, answer relevance, and context metrics.
                       </div>
 
-                      {/* Local Ragas Ollama Connection Status Card */}
+                      {/* Local Ragas Connection & Judge Model Selector Card */}
                       <div style={{ 
                         display: 'grid', 
                         gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', 
@@ -196,32 +222,77 @@ export const Evaluation = () => {
                           boxShadow: 'var(--card-shadow)',
                           display: 'flex',
                           alignItems: 'center',
-                          gap: '0.75rem'
+                          gap: '0.75rem',
+                          justifySpace: 'space-between',
+                          flexWrap: 'wrap'
                         }}>
-                          <div style={{
-                            width: '8px',
-                            height: '8px',
-                            borderRadius: '50%',
-                            backgroundColor: '#10b981',
-                            boxShadow: '0 0 8px #10b981'
-                          }} />
-                          <div>
-                            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                              Active Evaluation Judge Status
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1, minWidth: '280px' }}>
+                            <div style={{
+                              width: '10px',
+                              height: '10px',
+                              borderRadius: '50%',
+                              backgroundColor: connectivityReport?.llm?.status === 'error' ? '#ef4444' : '#10b981',
+                              boxShadow: connectivityReport?.llm?.status === 'error' ? '0 0 8px #ef4444' : '0 0 8px #10b981'
+                            }} />
+                            <div>
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                Active Evaluation Judge Status
+                              </div>
+                              <div style={{ fontSize: '0.88rem', fontWeight: 800, marginTop: '0.15rem' }}>
+                                Active Judge: <span style={{ color: '#818cf8' }}>{config.DEFAULT_MODEL_ID || 'System Default'}</span>
+                                {activeProfileName && <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: 600, marginLeft: '0.4rem' }}>({activeProfileName})</span>}
+                              </div>
+                              <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginTop: '0.1rem', display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                                <span>Endpoint:</span>
+                                <code 
+                                  style={{ cursor: 'pointer', borderBottom: '1px dashed var(--text-secondary)', color: 'var(--text-primary)', fontWeight: 600 }}
+                                  onClick={() => setRevealEndpoint(!revealEndpoint)}
+                                  title={revealEndpoint ? "Click to mask IP address" : "Click to reveal IP address"}
+                                >
+                                  {revealEndpoint ? (config.LLM_API_BASE_URL || 'Remote GPU Node') : maskIp(config.LLM_API_BASE_URL || 'Remote GPU Node')}
+                                </code>
+                                <span>| Mode: <code>{config.PROVIDER_TYPE || config.LLM_DEPLOYMENT_MODE || 'vLLM'}</code></span>
+                              </div>
                             </div>
-                            <div style={{ fontSize: '0.88rem', fontWeight: 800, marginTop: '0.15rem' }}>
-                              Model: <span style={{ color: '#818cf8' }}>{config.DEFAULT_MODEL_ID || 'System Default'}</span>
-                            </div>
-                            <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginTop: '0.1rem', display: 'flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
-                              <span>Endpoint:</span>
-                              <code 
-                                style={{ cursor: 'pointer', borderBottom: '1px dashed var(--text-secondary)', color: 'var(--text-primary)' }}
-                                onClick={() => setRevealEndpoint(!revealEndpoint)}
-                                title={revealEndpoint ? "Click to mask IP address" : "Click to reveal IP address"}
+                          </div>
+
+                          {/* Judge Model Selection Dropdown & Activate Button */}
+                          <div style={{ borderLeft: '1px solid var(--border-color)', paddingLeft: '1rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '320px' }}>
+                            <label style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 700, display: 'block' }}>
+                              ⚖️ Select & Activate LLM-as-Judge Model
+                            </label>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <select
+                                className="tenant-select"
+                                value={selectedJudgeProfile || activeProfileName || ''}
+                                onChange={(e) => {
+                                  const pName = e.target.value;
+                                  setSelectedJudgeProfile(pName);
+                                  const p = profiles && profiles[pName];
+                                  if (p && p.DEFAULT_MODEL_ID) {
+                                    setSelectedJudgeModel(p.DEFAULT_MODEL_ID);
+                                  }
+                                }}
+                                style={{ padding: '0.35rem 0.6rem', fontSize: '0.8rem', flex: 1 }}
                               >
-                                {revealEndpoint ? (config.LLM_API_BASE_URL || 'Remote GPU Node') : maskIp(config.LLM_API_BASE_URL || 'Remote GPU Node')}
-                              </code>
-                              <span>| Temperature: <code>0.0</code> (Cloud/On-Prem Mode)</span>
+                                {profiles && Object.entries(profiles).map(([profileName, prof]: [string, any]) => {
+                                  if (!prof || typeof prof !== 'object' || !prof.DEFAULT_MODEL_ID) return null;
+                                  return (
+                                    <option key={profileName} value={profileName}>
+                                      {prof.DEFAULT_MODEL_ID} ({profileName})
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                              <button
+                                className="btn btn-primary"
+                                onClick={() => handleActivateJudgeModel(selectedJudgeProfile || activeProfileName)}
+                                disabled={isTestingConnectivity}
+                                style={{ padding: '0.35rem 0.75rem', fontSize: '0.78rem', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                                title="Set active Judge Model connection profile and test all infrastructure endpoints"
+                              >
+                                {isTestingConnectivity ? '⚡ Testing...' : '⚡ Activate & Connect'}
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -264,13 +335,25 @@ export const Evaluation = () => {
 
                       {/* Tenant Workspace Evaluation Registry (Historical Runs) */}
                       <div style={{ marginBottom: '2.5rem' }}>
-                        <h4 style={{ fontSize: '1rem', fontWeight: 800, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          📜 Tenant Workspace Evaluation Registry (Historical Runs)
-                        </h4>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem' }}>
+                          <h4 style={{ fontSize: '1rem', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            📜 Tenant Workspace Evaluation Registry (Historical Runs)
+                          </h4>
+                          {selectedCompareIds.length === 2 && (
+                            <button 
+                              className="btn btn-primary"
+                              onClick={() => setIsCompareModalOpen(true)}
+                              style={{ padding: '0.35rem 0.85rem', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                            >
+                              <Sliders size={14} /> Side-by-Side Compare (2 Runs)
+                            </button>
+                          )}
+                        </div>
                         <div style={{ border: '1px solid var(--border-color)', borderRadius: '8px', overflowX: 'auto', overflowY: 'auto', maxHeight: '255px', backgroundColor: 'var(--bg-secondary)', boxShadow: 'var(--card-shadow)' }}>
-                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left', minWidth: '750px' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left', minWidth: '800px' }}>
                             <thead>
                               <tr style={{ borderBottom: '2px solid var(--border-color)', backgroundColor: 'var(--bg-primary)' }}>
+                                <th style={{ padding: '0.75rem 1rem', position: 'sticky', top: 0, backgroundColor: 'var(--bg-primary)', zIndex: 1, textAlign: 'center' }}>Compare</th>
                                 <th style={{ padding: '0.75rem 1rem', position: 'sticky', top: 0, backgroundColor: 'var(--bg-primary)', zIndex: 1 }}>Run ID</th>
                                 <th style={{ padding: '0.75rem 1rem', position: 'sticky', top: 0, backgroundColor: 'var(--bg-primary)', zIndex: 1 }}>Timestamp</th>
                                 <th style={{ padding: '0.75rem 1rem', position: 'sticky', top: 0, backgroundColor: 'var(--bg-primary)', zIndex: 1 }}>Tenant Matrix Scope</th>
@@ -286,10 +369,18 @@ export const Evaluation = () => {
                             </thead>
                             <tbody>
                               {(evalRuns || []).map((run) => (
-                                <tr key={run.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                <tr key={run.id} style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: selectedCompareIds.includes(String(run.id)) ? 'rgba(59, 130, 246, 0.08)' : 'transparent' }}>
+                                  <td style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>
+                                    <input 
+                                      type="checkbox"
+                                      checked={selectedCompareIds.includes(String(run.id))}
+                                      onChange={() => toggleCompareRun(String(run.id))}
+                                      style={{ cursor: 'pointer' }}
+                                    />
+                                  </td>
                                   <td style={{ padding: '0.75rem 1rem', fontWeight: 700 }}>{run.id}</td>
                                   <td style={{ padding: '0.75rem 1rem', color: 'var(--text-secondary)' }}>{run.timestamp}</td>
-                                  <td style={{ padding: '0.75rem 1rem' }}><span className="trace-badge">{run.tenant_id.toUpperCase()}</span></td>
+                                  <td style={{ padding: '0.75rem 1rem' }}><span className="trace-badge">{(run.tenant_id || '').toUpperCase()}</span></td>
                                   <td style={{ padding: '0.75rem 1rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
                                     {run.params ? (
                                       <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
@@ -341,6 +432,97 @@ export const Evaluation = () => {
                           </table>
                         </div>
                       </div>
+
+                      {/* Side-by-Side Comparison Modal */}
+                      {isCompareModalOpen && selectedCompareIds.length === 2 && (() => {
+                        const runA = (evalRuns || []).find(r => String(r.id) === selectedCompareIds[0]);
+                        const runB = (evalRuns || []).find(r => String(r.id) === selectedCompareIds[1]);
+                        if (!runA || !runB) return null;
+
+                        const renderDelta = (valA: number, valB: number) => {
+                          const diff = valB - valA;
+                          if (Math.abs(diff) < 0.001) return <span style={{ color: 'var(--text-secondary)' }}>No Delta (0.00)</span>;
+                          const isPos = diff > 0;
+                          const pct = valA > 0 ? ((diff / valA) * 100).toFixed(1) : '0';
+                          return (
+                            <span style={{ 
+                              fontWeight: 700, 
+                              color: isPos ? '#10b981' : '#ef4444', 
+                              backgroundColor: isPos ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                              padding: '0.25rem 0.6rem',
+                              borderRadius: '4px',
+                              fontSize: '0.8rem'
+                            }}>
+                              {isPos ? `↑ +${diff.toFixed(2)} (+${pct}%)` : `↓ ${diff.toFixed(2)} (${pct}%)`}
+                            </span>
+                          );
+                        };
+
+                        return (
+                          <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.65)', zIndex: 99999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
+                            <div style={{ width: '90%', maxWidth: '850px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '1.5rem', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.4)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.85rem' }}>
+                                <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                  📊 Side-by-Side Evaluation Metric Comparison
+                                </h3>
+                                <button className="btn btn-outline" onClick={() => setIsCompareModalOpen(false)} style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem' }}>
+                                  ✕ Close
+                                </button>
+                              </div>
+
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+                                <div style={{ padding: '0.85rem', backgroundColor: 'var(--bg-primary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                                  <h4 style={{ margin: '0 0 0.4rem 0', color: 'var(--accent)' }}>Baseline: Run #{runA.id}</h4>
+                                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Timestamp: {runA.timestamp}</div>
+                                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Tenant Scope: <strong>{(runA.tenant_id || '').toUpperCase()}</strong></div>
+                                </div>
+                                <div style={{ padding: '0.85rem', backgroundColor: 'var(--bg-primary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                                  <h4 style={{ margin: '0 0 0.4rem 0', color: 'var(--accent)' }}>Target: Run #{runB.id}</h4>
+                                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Timestamp: {runB.timestamp}</div>
+                                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Tenant Scope: <strong>{(runB.tenant_id || '').toUpperCase()}</strong></div>
+                                </div>
+                              </div>
+
+                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', marginBottom: '1rem' }}>
+                                <thead>
+                                  <tr style={{ borderBottom: '2px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', textAlign: 'left' }}>
+                                    <th style={{ padding: '0.75rem 1rem' }}>Quality Metric</th>
+                                    <th style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>Run #{runA.id}</th>
+                                    <th style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>Run #{runB.id}</th>
+                                    <th style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>Delta (Run B vs A)</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                    <td style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Faithfulness (Grounding)</td>
+                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'center', fontWeight: 700 }}>{runA.scores.faithfulness.toFixed(2)}</td>
+                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'center', fontWeight: 700 }}>{runB.scores.faithfulness.toFixed(2)}</td>
+                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>{renderDelta(runA.scores.faithfulness, runB.scores.faithfulness)}</td>
+                                  </tr>
+                                  <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                    <td style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Answer Relevancy</td>
+                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'center', fontWeight: 700 }}>{runA.scores.answer_relevance.toFixed(2)}</td>
+                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'center', fontWeight: 700 }}>{runB.scores.answer_relevance.toFixed(2)}</td>
+                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>{renderDelta(runA.scores.answer_relevance, runB.scores.answer_relevance)}</td>
+                                  </tr>
+                                  <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                    <td style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Context Precision</td>
+                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'center', fontWeight: 700 }}>{runA.scores.context_precision.toFixed(2)}</td>
+                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'center', fontWeight: 700 }}>{runB.scores.context_precision.toFixed(2)}</td>
+                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>{renderDelta(runA.scores.context_precision, runB.scores.context_precision)}</td>
+                                  </tr>
+                                  <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                    <td style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Context Recall</td>
+                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'center', fontWeight: 700 }}>{(runA.scores.context_recall || 0).toFixed(2)}</td>
+                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'center', fontWeight: 700 }}>{(runB.scores.context_recall || 0).toFixed(2)}</td>
+                                    <td style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>{renderDelta(runA.scores.context_recall || 0, runB.scores.context_recall || 0)}</td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       {/* Infrastructure Diagnostics Banner */}
                       <div className="telemetry-card" style={{ marginBottom: '2.5rem', padding: '1.25rem', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'rgba(255,255,255,0.02)' }}>

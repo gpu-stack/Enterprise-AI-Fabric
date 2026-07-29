@@ -27,6 +27,8 @@ export const Chat = () => {
     setFileConfigs,
     isIngesting,
     setIsIngesting,
+    activeJobs,
+    setActiveJobs,
     ingestProgress,
     setIngestProgress,
     ingestStatusText,

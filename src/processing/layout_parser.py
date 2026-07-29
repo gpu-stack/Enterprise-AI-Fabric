@@ -22,7 +22,7 @@ class LayoutAwareParser:
         }
         
         payload = {
-            "model": "gemini-3.5-flash",
+            "model": Config.DEFAULT_MODEL_ID or "gemini-3.5-flash",
             "messages": [
                 {
                     "role": "user",
@@ -197,7 +197,6 @@ class LayoutAwareParser:
                         else:
                             heading_type = "prose"
                             # Standardize lists
-                            lower_text = line_text.lower()
                             if line_text.startswith(("- ", "* ", "• ", "o ")):
                                 formatted_text = f"- {line_text[2:].strip()}"
                             elif any(line_text.startswith(f"{i}. ") for i in range(1, 20)):

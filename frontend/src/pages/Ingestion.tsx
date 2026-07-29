@@ -26,6 +26,8 @@ export const Ingestion = () => {
     setFileConfigs,
     isIngesting,
     setIsIngesting,
+    activeJobs,
+    setActiveJobs,
     ingestProgress,
     setIngestProgress,
     ingestStatusText,

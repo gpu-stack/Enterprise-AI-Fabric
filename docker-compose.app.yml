@@ -1,0 +1,131 @@
+version: '3.8'
+
+networks:
+  rag_network:
+    driver: bridge
+    name: enterprise_rag_network
+
+services:
+  # -------------------------------------------------------------------
+  # 1. CENTRAL MESSAGE BROKER & RESULT STORE
+  # -------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: enterprise_rag_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - rag_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # -------------------------------------------------------------------
+  # 2. WEB UI & API GATEWAY CONTAINER
+  # -------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    image: enterprise-rag-app:latest
+    container_name: enterprise_rag_app
+    restart: unless-stopped
+    ports:
+      - "80:80"       # Nginx Frontend UI & API Gateway Reverse Proxy
+      - "8000:8000"   # Direct FastAPI REST Port
+    volumes:
+      - ./app_data:/app/app_data
+      - ./uploads:/app/data/uploads
+      - ./embedding_cache:/app/embedding_cache
+    environment:
+      - DATA_DIR=/app/app_data
+      # --- DECOUPLED AI INFRASTRUCTURE ENDPOINTS ---
+      - QDRANT_HOST=${QDRANT_HOST:-host.docker.internal}
+      - QDRANT_PORT=${QDRANT_PORT:-6333}
+      - QDRANT_URL=${QDRANT_URL:-}
+      - EMBEDDING_SERVER_URL=${EMBEDDING_SERVER_URL:-}
+      - RERANKER_SERVER_URL=${RERANKER_SERVER_URL:-}
+      
+      # --- LLM ENGINE CONFIG ---
+      - LLM_DEPLOYMENT_MODE=${LLM_DEPLOYMENT_MODE:-CLOUD}
+      - LLM_API_BASE_URL=${LLM_API_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+      - LLM_API_KEY=${LLM_API_KEY:-none}
+      - DEFAULT_MODEL_ID=${DEFAULT_MODEL_ID:-gemini-3.5-flash}
+
+      # --- REDIS / CELERY ---
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    networks:
+      - rag_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # -------------------------------------------------------------------
+  # 3. ASYNCHRONOUS CELERY INGESTION WORKER POOL
+  # -------------------------------------------------------------------
+  celery_worker:
+    image: enterprise-rag-app:latest
+    container_name: enterprise_rag_celery
+    restart: unless-stopped
+    command: celery -A src.processing.tasks.celery worker --loglevel=info --concurrency=4
+    volumes:
+      - ./app_data:/app/app_data
+      - ./uploads:/app/data/uploads
+      - ./embedding_cache:/app/embedding_cache
+    environment:
+      - DATA_DIR=/app/app_data
+      # --- DECOUPLED AI INFRASTRUCTURE ENDPOINTS ---
+      - QDRANT_HOST=${QDRANT_HOST:-host.docker.internal}
+      - QDRANT_PORT=${QDRANT_PORT:-6333}
+      - QDRANT_URL=${QDRANT_URL:-}
+      - EMBEDDING_SERVER_URL=${EMBEDDING_SERVER_URL:-}
+      - RERANKER_SERVER_URL=${RERANKER_SERVER_URL:-}
+
+      # --- LLM ENGINE CONFIG ---
+      - LLM_DEPLOYMENT_MODE=${LLM_DEPLOYMENT_MODE:-CLOUD}
+      - LLM_API_BASE_URL=${LLM_API_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+      - LLM_API_KEY=${LLM_API_KEY:-none}
+
+      # --- REDIS / CELERY ---
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    networks:
+      - rag_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A src.processing.tasks.celery inspect ping || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_started
