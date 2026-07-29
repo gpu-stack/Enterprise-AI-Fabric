@@ -35,7 +35,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.app
-    image: enterprise-rag-app:latest
+    image: enterprise-ai-fabric:latest
     container_name: enterprise_rag_app
     restart: unless-stopped
     ports:
@@ -85,7 +85,7 @@ services:
   # 3. ASYNCHRONOUS CELERY INGESTION WORKER POOL
   # -------------------------------------------------------------------
   celery_worker:
-    image: enterprise-rag-app:latest
+    image: enterprise-ai-fabric:latest
     container_name: enterprise_rag_celery
     restart: unless-stopped
     command: celery -A src.processing.tasks.celery worker --loglevel=info --concurrency=4
