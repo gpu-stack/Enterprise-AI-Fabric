@@ -1,15 +1,17 @@
+name: enterprise-ai-fabric
+
 networks:
   rag_network:
     driver: bridge
-    name: enterprise_rag_network
+    name: enterprise_ai_fabric_network
 
 volumes:
   app_data:
-    name: enterprise_rag_app_data
+    name: enterprise_ai_fabric_app_data
   app_uploads:
-    name: enterprise_rag_app_uploads
+    name: enterprise_ai_fabric_app_uploads
   app_cache:
-    name: enterprise_rag_app_cache
+    name: enterprise_ai_fabric_app_cache
 
 services:
   # -------------------------------------------------------------------
@@ -17,7 +19,7 @@ services:
   # -------------------------------------------------------------------
   redis:
     image: redis:7-alpine
-    container_name: enterprise_rag_redis
+    container_name: enterprise_ai_fabric_redis
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -42,7 +44,7 @@ services:
       context: .
       dockerfile: Dockerfile.app
     image: ${IMAGE_NAME:-sandyappdev/enterprise-ai-fabric:latest}
-    container_name: enterprise_rag_app
+    container_name: enterprise_ai_fabric_app
     restart: unless-stopped
     ports:
       - "9090:9090"   # Nginx Frontend UI & API Gateway Reverse Proxy
@@ -95,7 +97,7 @@ services:
       context: .
       dockerfile: Dockerfile.app
     image: ${IMAGE_NAME:-sandyappdev/enterprise-ai-fabric:latest}
-    container_name: enterprise_rag_celery
+    container_name: enterprise_ai_fabric_celery
     restart: unless-stopped
     entrypoint: ["celery", "-A", "src.processing.tasks.celery", "worker", "--loglevel=info", "--concurrency=4"]
     volumes:
