@@ -46,7 +46,7 @@ services:
     restart: unless-stopped
     ports:
       - "9090:9090"   # Nginx Frontend UI & API Gateway Reverse Proxy
-      - "9000:9000"   # Direct FastAPI REST Port
+      - "9001:9000"   # Direct FastAPI REST Port (Avoid host 9000 conflict)
     volumes:
       - app_data:/app/app_data
       - app_uploads:/app/data/uploads
