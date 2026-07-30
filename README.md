@@ -194,10 +194,11 @@ docker compose -f docker-compose.app.yml up -d
 #### Step 4 — Open the Web Console & Tune Workload
 Open your browser at:
 ```
-http://localhost
+http://localhost:9090
 ```
-* **Web SPA Console & API Gateway:** `http://localhost` (or `http://localhost:8000`)
-* **Workload & Runtime Tuning Engine:** `http://localhost/tuning` (Configure LLM generation tokens, Qdrant top-k, reranking thresholds, and chunking parameters dynamically before running workloads).
+* **Web SPA Console & API Gateway:** `http://localhost:9090`
+* **Workload & Runtime Tuning Engine:** `http://localhost:9090/tuning`
+* **Direct REST API & Swagger Docs:** `http://localhost:9000/docs`
 
 ---
 

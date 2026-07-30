@@ -43,12 +43,12 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 # Create persistent storage directories
 RUN mkdir -p /app/app_data /app/uploads /app/embedding_cache
 
-# Expose HTTP port 80 (Nginx) & 8000 (FastAPI API Direct)
-EXPOSE 80 8000
+# Expose HTTP port 9090 (Nginx) & 9000 (FastAPI API Direct)
+EXPOSE 9090 9000
 
 # Health check endpoint
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost:80/api/health || exit 1
+  CMD curl -f http://localhost:9090/api/health || exit 1
 
 # Launch Supervisor Process Orchestrator
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
