@@ -154,37 +154,62 @@ graph TD
 
 ---
 
-## 6. Quick Start (Fixed & Verified)
+## 6. Quick Start & Deployment Guide
 
-### Prerequisites
-- Docker Engine 20.10+ and Compose v2.0+
-- 8 GB RAM minimum (16 GB recommended)
-- NVIDIA GPU + `nvidia-container-toolkit` (optional, for GPU-accelerated embedding/reranking)
+### Official Docker Hub Repository
+The pre-built, production-ready unified image packaging both the React SPA Console and FastAPI Control Plane is published on Docker Hub:
+👉 **[sandyappdev/enterprise-ai-fabric on Docker Hub](https://hub.docker.com/r/sandyappdev/enterprise-ai-fabric)** (`sandyappdev/enterprise-ai-fabric:latest`)
 
-### Step 1 — Configure environment
+---
+
+### Method 1: Production Run (Instant Docker Hub Deployment)
+
+#### Step 1 — Clone the Repository & Configure Environment
 ```bash
-cp .env.docker .env
+git clone https://github.com/gpu-stack/Enterprise-AI-Fabric.git
+cd Enterprise-AI-Fabric
+cp .env.example .env
 ```
-Edit `.env` and set your preferred infrastructure endpoints and LLM deployment mode.
+*(Optionally edit `.env` to configure your API keys and target LLM endpoints).*
 
-### Step 2 — Start the infrastructure microservices (Qdrant, embedder, reranker, redis)
+#### Step 2 — Launch Infrastructure Microservices (Qdrant Vector DB, Embedder, Reranker, Redis)
 ```bash
-# CPU-only
-docker compose -f docker-compose.infra.yml --env-file .env up -d
+# CPU Infrastructure Mode:
+docker compose -f docker-compose.infra.yml up -d
 
-# or, with an NVIDIA GPU
-docker compose -f docker-compose.infra-gpu.yml --env-file .env up -d
+# OR NVIDIA GPU-Accelerated Mode:
+docker compose -f docker-compose.infra-gpu.yml up -d
 ```
 
-### Step 3 — Build and launch the application container
+#### Step 3 — Launch the Application Stack (Pull from Docker Hub)
 ```bash
-docker compose -f docker-compose.app.yml build
 docker compose -f docker-compose.app.yml up -d
 ```
+> **What this does:**
+> - Automatically pulls `sandyappdev/enterprise-ai-fabric:latest` from Docker Hub.
+> - Starts the **Central Redis Broker** (`enterprise_rag_redis`).
+> - Starts the **Unified UI & API Gateway** (`enterprise_rag_app`).
+> - Starts the **Celery Async Ingestion Worker** (`enterprise_rag_celery`).
 
-### Step 4 — Open the console
+#### Step 4 — Open the Web Console & Tune Workload
+Open your browser at:
 ```
-http://localhost:8000
+http://localhost
+```
+* **Web SPA Console & API Gateway:** `http://localhost` (or `http://localhost:8000`)
+* **Workload & Runtime Tuning Engine:** `http://localhost/tuning` (Configure LLM generation tokens, Qdrant top-k, reranking thresholds, and chunking parameters dynamically before running workloads).
+
+---
+
+### Method 2: Custom Local Build
+
+To build the image locally from source:
+```bash
+# Build the unified frontend + backend image locally
+docker compose -f docker-compose.app.yml build
+
+# Start the stack
+docker compose -f docker-compose.app.yml up -d
 ```
 
 ---
@@ -228,6 +253,7 @@ Encryption keys, connection profiles, tenant metadata, evaluation logs, and audi
 - Azure OpenAI Native REST Onboarding (`_build_llm_endpoint_and_headers`)
 - SQLite Audit Vault & Dynamic Log Retention Manager
 - Real-Time Enterprise SLA Telemetry Dashboard (p50, p90, p95, p99 percentiles)
+- Live Workload & Runtime Tuning Engine (`/tuning`) with 1-click preset hardware profiles & stack-wise tuning
 
 **Roadback Targets:**
 - Role-based Access Control (RBAC) & JWT API Authentication
