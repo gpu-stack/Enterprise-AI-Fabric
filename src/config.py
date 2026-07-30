@@ -39,6 +39,9 @@ class Config:
     LLM_API_BASE_URL = os.getenv("LLM_API_BASE_URL", "http://localhost:8000/v1").rstrip("/")
     LLM_API_KEY = os.getenv("LLM_API_KEY", "none")
     DEFAULT_MODEL_ID = os.getenv("DEFAULT_MODEL_ID", "gemini-1.5-pro")
+    DEFAULT_MAX_TOKENS = int(os.getenv("DEFAULT_MAX_TOKENS", "512"))
+    DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.0"))
+    DEFAULT_REPETITION_PENALTY = float(os.getenv("DEFAULT_REPETITION_PENALTY", "1.05"))
 
     # --- PARAMETRIC RECOVERY RULES ---
     CHUNK_MAX_SIZE = int(os.getenv("CHUNK_MAX_SIZE", "1200"))
@@ -92,8 +95,60 @@ class Config:
             cls.LLM_API_KEY = str(overrides["LLM_API_KEY"])
         if "DEFAULT_MODEL_ID" in overrides and overrides["DEFAULT_MODEL_ID"]:
             cls.DEFAULT_MODEL_ID = str(overrides["DEFAULT_MODEL_ID"])
+        if "DEFAULT_MAX_TOKENS" in overrides:
+            try:
+                cls.DEFAULT_MAX_TOKENS = int(overrides["DEFAULT_MAX_TOKENS"])
+            except (ValueError, TypeError):
+                pass
+        if "DEFAULT_TEMPERATURE" in overrides:
+            try:
+                cls.DEFAULT_TEMPERATURE = float(overrides["DEFAULT_TEMPERATURE"])
+            except (ValueError, TypeError):
+                pass
+        if "DEFAULT_REPETITION_PENALTY" in overrides:
+            try:
+                cls.DEFAULT_REPETITION_PENALTY = float(overrides["DEFAULT_REPETITION_PENALTY"])
+            except (ValueError, TypeError):
+                pass
         if "REDIS_URL" in overrides and overrides["REDIS_URL"]:
             cls.REDIS_URL = str(overrides["REDIS_URL"])
+        if "RERANK_ENABLED" in overrides:
+            cls.RERANK_ENABLED = str(overrides["RERANK_ENABLED"]).lower() == "true" or overrides["RERANK_ENABLED"] is True
+        if "CHUNK_MAX_SIZE" in overrides:
+            try:
+                cls.CHUNK_MAX_SIZE = int(overrides["CHUNK_MAX_SIZE"])
+            except (ValueError, TypeError):
+                pass
+        if "CHUNK_OVERLAP" in overrides:
+            try:
+                cls.CHUNK_OVERLAP = int(overrides["CHUNK_OVERLAP"])
+            except (ValueError, TypeError):
+                pass
+        if "NOISE_THRESHOLD_GATE" in overrides:
+            try:
+                cls.NOISE_THRESHOLD_GATE = int(overrides["NOISE_THRESHOLD_GATE"])
+            except (ValueError, TypeError):
+                pass
+        if "CLIENT_BATCH_LIMIT" in overrides:
+            try:
+                cls.CLIENT_BATCH_LIMIT = int(overrides["CLIENT_BATCH_LIMIT"])
+            except (ValueError, TypeError):
+                pass
+        if "TEI_TIMEOUT" in overrides:
+            try:
+                cls.TEI_TIMEOUT = int(overrides["TEI_TIMEOUT"])
+            except (ValueError, TypeError):
+                pass
+        if "RERANK_TIMEOUT" in overrides:
+            try:
+                cls.RERANK_TIMEOUT = int(overrides["RERANK_TIMEOUT"])
+            except (ValueError, TypeError):
+                pass
+        if "VECTOR_DIMENSION" in overrides:
+            try:
+                cls.VECTOR_DIMENSION = int(overrides["VECTOR_DIMENSION"])
+            except (ValueError, TypeError):
+                pass
 
 # Create settings alias for compatibility with modules
 settings = Config

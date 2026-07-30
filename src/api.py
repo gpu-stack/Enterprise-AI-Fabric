@@ -88,6 +88,17 @@ def get_active_llm_config() -> dict:
     cfg["VECTOR_TOP_K"] = int(global_ds.get("VECTOR_TOP_K", Config.VECTOR_TOP_K))
     cfg["RERANK_TOP_K"] = int(global_ds.get("RERANK_TOP_K", Config.RERANK_TOP_K))
     cfg["RERANKER_SCORE_THRESHOLD"] = float(global_ds.get("RERANKER_SCORE_THRESHOLD", Config.RERANKER_SCORE_THRESHOLD))
+    cfg["DEFAULT_MAX_TOKENS"] = int(global_ds.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS))
+    cfg["DEFAULT_TEMPERATURE"] = float(global_ds.get("DEFAULT_TEMPERATURE", Config.DEFAULT_TEMPERATURE))
+    cfg["DEFAULT_REPETITION_PENALTY"] = float(global_ds.get("DEFAULT_REPETITION_PENALTY", Config.DEFAULT_REPETITION_PENALTY))
+    cfg["RERANK_ENABLED"] = global_ds.get("RERANK_ENABLED", Config.RERANK_ENABLED)
+    cfg["CHUNK_MAX_SIZE"] = int(global_ds.get("CHUNK_MAX_SIZE", Config.CHUNK_MAX_SIZE))
+    cfg["CHUNK_OVERLAP"] = int(global_ds.get("CHUNK_OVERLAP", Config.CHUNK_OVERLAP))
+    cfg["NOISE_THRESHOLD_GATE"] = int(global_ds.get("NOISE_THRESHOLD_GATE", Config.NOISE_THRESHOLD_GATE))
+    cfg["CLIENT_BATCH_LIMIT"] = int(global_ds.get("CLIENT_BATCH_LIMIT", Config.CLIENT_BATCH_LIMIT))
+    cfg["TEI_TIMEOUT"] = int(global_ds.get("TEI_TIMEOUT", Config.TEI_TIMEOUT))
+    cfg["RERANK_TIMEOUT"] = int(global_ds.get("RERANK_TIMEOUT", Config.RERANK_TIMEOUT))
+    cfg["VECTOR_DIMENSION"] = int(global_ds.get("VECTOR_DIMENSION", Config.VECTOR_DIMENSION))
     
     return cfg
 # Helper: Determine production grading status from Ragas metrics
@@ -401,12 +412,23 @@ async def get_configuration():
         "LLM_API_KEY": cfg.get("LLM_API_KEY", ""),
         "MASKED_API_KEY": masked_key,
         "DEFAULT_MODEL_ID": cfg.get("DEFAULT_MODEL_ID", ""),
+        "DEFAULT_MAX_TOKENS": int(cfg.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS)),
+        "DEFAULT_TEMPERATURE": float(cfg.get("DEFAULT_TEMPERATURE", Config.DEFAULT_TEMPERATURE)),
+        "DEFAULT_REPETITION_PENALTY": float(cfg.get("DEFAULT_REPETITION_PENALTY", Config.DEFAULT_REPETITION_PENALTY)),
         "QDRANT_URL": cfg.get("QDRANT_URL", Config.QDRANT_BASE_URL),
         "EMBEDDING_SERVER_URL": cfg.get("EMBEDDING_SERVER_URL", Config.EMBEDDING_SERVER_URL),
         "RERANKER_SERVER_URL": cfg.get("RERANKER_SERVER_URL", Config.RERANKER_SERVER_URL),
         "VECTOR_TOP_K": int(cfg.get("VECTOR_TOP_K", Config.VECTOR_TOP_K)),
         "RERANK_TOP_K": int(cfg.get("RERANK_TOP_K", Config.RERANK_TOP_K)),
-        "RERANKER_SCORE_THRESHOLD": float(cfg.get("RERANKER_SCORE_THRESHOLD", Config.RERANKER_SCORE_THRESHOLD))
+        "RERANKER_SCORE_THRESHOLD": float(cfg.get("RERANKER_SCORE_THRESHOLD", Config.RERANKER_SCORE_THRESHOLD)),
+        "RERANK_ENABLED": bool(cfg.get("RERANK_ENABLED", Config.RERANK_ENABLED)),
+        "CHUNK_MAX_SIZE": int(cfg.get("CHUNK_MAX_SIZE", Config.CHUNK_MAX_SIZE)),
+        "CHUNK_OVERLAP": int(cfg.get("CHUNK_OVERLAP", Config.CHUNK_OVERLAP)),
+        "NOISE_THRESHOLD_GATE": int(cfg.get("NOISE_THRESHOLD_GATE", Config.NOISE_THRESHOLD_GATE)),
+        "CLIENT_BATCH_LIMIT": int(cfg.get("CLIENT_BATCH_LIMIT", Config.CLIENT_BATCH_LIMIT)),
+        "TEI_TIMEOUT": int(cfg.get("TEI_TIMEOUT", Config.TEI_TIMEOUT)),
+        "RERANK_TIMEOUT": int(cfg.get("RERANK_TIMEOUT", Config.RERANK_TIMEOUT)),
+        "VECTOR_DIMENSION": int(cfg.get("VECTOR_DIMENSION", Config.VECTOR_DIMENSION))
     }
 
 @app.post("/api/config")
@@ -610,12 +632,23 @@ async def save_runtime_settings(settings_data: Dict[str, Any]):
     profiles = SecureStorageManager.load_encrypted_profiles()
     
     profiles["_global_downstream"] = {
-        "QDRANT_URL": settings_data.get("QDRANT_URL", ""),
-        "EMBEDDING_SERVER_URL": settings_data.get("EMBEDDING_SERVER_URL", ""),
-        "RERANKER_SERVER_URL": settings_data.get("RERANKER_SERVER_URL", ""),
+        "DEFAULT_MAX_TOKENS": int(settings_data.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS)),
+        "DEFAULT_TEMPERATURE": float(settings_data.get("DEFAULT_TEMPERATURE", Config.DEFAULT_TEMPERATURE)),
+        "DEFAULT_REPETITION_PENALTY": float(settings_data.get("DEFAULT_REPETITION_PENALTY", Config.DEFAULT_REPETITION_PENALTY)),
+        "QDRANT_URL": settings_data.get("QDRANT_URL", Config.QDRANT_BASE_URL),
+        "EMBEDDING_SERVER_URL": settings_data.get("EMBEDDING_SERVER_URL", Config.EMBEDDING_SERVER_URL),
+        "RERANKER_SERVER_URL": settings_data.get("RERANKER_SERVER_URL", Config.RERANKER_SERVER_URL),
         "VECTOR_TOP_K": int(settings_data.get("VECTOR_TOP_K", Config.VECTOR_TOP_K)),
         "RERANK_TOP_K": int(settings_data.get("RERANK_TOP_K", Config.RERANK_TOP_K)),
-        "RERANKER_SCORE_THRESHOLD": float(settings_data.get("RERANKER_SCORE_THRESHOLD", Config.RERANKER_SCORE_THRESHOLD))
+        "RERANKER_SCORE_THRESHOLD": float(settings_data.get("RERANKER_SCORE_THRESHOLD", Config.RERANKER_SCORE_THRESHOLD)),
+        "RERANK_ENABLED": settings_data.get("RERANK_ENABLED", Config.RERANK_ENABLED),
+        "CHUNK_MAX_SIZE": int(settings_data.get("CHUNK_MAX_SIZE", Config.CHUNK_MAX_SIZE)),
+        "CHUNK_OVERLAP": int(settings_data.get("CHUNK_OVERLAP", Config.CHUNK_OVERLAP)),
+        "NOISE_THRESHOLD_GATE": int(settings_data.get("NOISE_THRESHOLD_GATE", Config.NOISE_THRESHOLD_GATE)),
+        "CLIENT_BATCH_LIMIT": int(settings_data.get("CLIENT_BATCH_LIMIT", Config.CLIENT_BATCH_LIMIT)),
+        "TEI_TIMEOUT": int(settings_data.get("TEI_TIMEOUT", Config.TEI_TIMEOUT)),
+        "RERANK_TIMEOUT": int(settings_data.get("RERANK_TIMEOUT", Config.RERANK_TIMEOUT)),
+        "VECTOR_DIMENSION": int(settings_data.get("VECTOR_DIMENSION", Config.VECTOR_DIMENSION))
     }
     
     SecureStorageManager.save_encrypted_profiles(profiles)

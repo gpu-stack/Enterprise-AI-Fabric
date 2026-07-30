@@ -90,6 +90,7 @@ class MultiTenantQueryEngine:
                 response = self.qdrant.query_points(
                     collection_name=self.collection_name,
                     query=query_vector,
+                    using="dense",
                     query_filter=query_filter,
                     limit=qdrant_limit,
                     with_payload=True
@@ -126,7 +127,6 @@ class MultiTenantQueryEngine:
                     })
             
             # 4. If Reranker is enabled and reachable, perform Cross-Encoder reranking
-            reranker_success = False
             if getattr(settings, "RERANK_ENABLED", True) and retrieved_contexts:
                 rerank_start = time.perf_counter_ns()
                 try:
@@ -157,7 +157,6 @@ class MultiTenantQueryEngine:
                         
                         # Sort ENTIRE candidate list strictly in descending order by Cross-Encoder score
                         retrieved_contexts.sort(key=lambda x: x["score"], reverse=True)
-                        reranker_success = True
                         sys_logger.success(f"Reranker re-ranked and uniformly scored {len(retrieved_contexts)} blocks successfully", component="RERANKER")
                     else:
                         sys_logger.warning(f"Reranker returned status code {res.status_code}. Falling back to vector ranking.", component="RERANKER")

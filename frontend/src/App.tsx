@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { 
   Shield, UploadCloud, Cpu, Server, Sun, Moon, 
-  FileText, BarChart2, Sliders, Activity, Menu, X, FolderOpen
+  FileText, BarChart2, Sliders, Activity, Menu, X, FolderOpen, SlidersHorizontal
 } from 'lucide-react';
 import './App.css';
 import { useAppLogic } from './useAppLogic';
@@ -18,6 +18,7 @@ import { Settings } from './pages/Settings';
 import { Analytics } from './pages/Analytics';
 import { DocumentLibrary } from './pages/DocumentLibrary';
 import { LogsConsole } from './pages/LogsConsole';
+import { WorkloadTuning } from './pages/WorkloadTuning';
 import { BackgroundJobPoller } from './components/BackgroundJobPoller';
 
 // ─────────────────────────────────────────────────────────────
@@ -346,6 +347,9 @@ const AppLayout = () => {
           </NavLink>
 
           <div className="tab-nav-category">Administration</div>
+          <NavLink to="/tuning" className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}>
+            <SlidersHorizontal size={16} /> Workload Tuning
+          </NavLink>
           <NavLink to="/settings" className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}>
             <Sliders size={16} /> System Settings
           </NavLink>
@@ -391,6 +395,7 @@ const AppLayout = () => {
           <Route path="/ingestion" element={<ErrorBoundary label="Ingestion"><Ingestion /></ErrorBoundary>} />
           <Route path="/documents" element={<ErrorBoundary label="Document Library"><DocumentLibrary /></ErrorBoundary>} />
           <Route path="/eval" element={<ErrorBoundary label="Evaluation"><Evaluation /></ErrorBoundary>} />
+          <Route path="/tuning" element={<ErrorBoundary label="Workload Tuning"><WorkloadTuning /></ErrorBoundary>} />
           <Route path="/settings" element={<ErrorBoundary label="System Settings"><Settings /></ErrorBoundary>} />
           <Route path="/analytics" element={<ErrorBoundary label="Analytics"><Analytics /></ErrorBoundary>} />
           <Route path="/logs" element={<ErrorBoundary label="System Audit & Logs"><LogsConsole /></ErrorBoundary>} />

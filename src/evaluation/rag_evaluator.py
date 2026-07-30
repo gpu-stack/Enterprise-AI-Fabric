@@ -1,6 +1,6 @@
 import re
 import json
-import urllib.request
+import random
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -249,35 +249,29 @@ class RAGEvaluator:
 
     def generate_synthetic_test_set(self, tenant_id: str, count: int = 5) -> List[Dict[str, str]]:
         """Retrieves raw chunks from the tenant's isolated vector store and synthesizes QA test cases using the LLM."""
-        import random
-        url = f"{settings.QDRANT_BASE_URL.rstrip('/')}/collections/{settings.COLLECTION_NAME}/points/scroll"
-        payload = {
-            "limit": 100,
-            "filter": {"must": [{"key": "tenant_id", "match": {"value": tenant_id}}]},
-            "with_payload": True,
-            "with_vector": False
-        }
-        
         chunks = []
         try:
-            print("[START] Qdrant scroll request dispatching to remote A40 node")
-            req = urllib.request.Request(
-                url, data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"}, method="POST"
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            points, _ = self.query_engine.qdrant.scroll(
+                collection_name=settings.COLLECTION_NAME,
+                scroll_filter=Filter(
+                    must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]
+                ),
+                limit=100,
+                with_payload=True,
+                with_vectors=False
             )
-            with urllib.request.urlopen(req, timeout=15.0) as response:
-                res = json.loads(response.read().decode("utf-8")).get("result", {})
-                points = res.get("points", [])
-                valid_chunks = []
-                for pt in points:
-                    txt = pt.get("payload", {}).get("document_text", "")
-                    if txt and len(txt) > 200:
-                        valid_chunks.append(txt)
-                if valid_chunks:
-                    chunks = random.sample(valid_chunks, min(len(valid_chunks), count))
-            print("[END] Qdrant scroll request successfully completed")
+            valid_chunks = []
+            for pt in points:
+                payload = pt.payload or {}
+                txt = payload.get("document_text", "") or payload.get("parent_text", "")
+                if txt and len(txt) > 200:
+                    valid_chunks.append(txt)
+            if valid_chunks:
+                chunks = random.sample(valid_chunks, min(len(valid_chunks), count))
+            sys_logger.info(f"Qdrant scroll retrieved {len(chunks)} candidate blocks for synthetic test generation", component="EVALUATOR")
         except Exception as e:
-            print(f"⚠️ Failed to scroll points from Qdrant: {str(e)}")
+            sys_logger.warning(f"Failed to scroll points from Qdrant: {str(e)}", component="EVALUATOR")
             
         if not chunks:
             return []

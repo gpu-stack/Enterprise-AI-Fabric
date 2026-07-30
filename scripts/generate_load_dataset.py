@@ -7,7 +7,6 @@ Generates realistic corporate PDF documents for ingestion and RAG benchmark test
 import os
 import random
 import argparse
-from typing import List
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle

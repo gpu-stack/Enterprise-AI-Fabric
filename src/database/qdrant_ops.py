@@ -1,6 +1,3 @@
-import json
-import urllib.request
-import urllib.error
 from src.config import Config
 
 class QdrantManager:

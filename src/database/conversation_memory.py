@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict
 from src.config import settings
 
 logger = logging.getLogger("ConversationMemory")

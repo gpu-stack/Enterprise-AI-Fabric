@@ -76,9 +76,10 @@ class LogRetentionManager:
 
         result = {
             "status": "success",
-            "message": f"Successfully purged {sys_purged} system logs, {audit_purged} audit records, and {len(purged_files)} log file segments.",
+            "message": f"Successfully purged {sys_purged} system logs, {audit_purged} audit records, {metrics_purged} metrics, and {len(purged_files)} log file segments.",
             "sys_logs_purged": sys_purged,
             "audit_records_purged": audit_purged,
+            "metrics_purged": metrics_purged,
             "purged_files": purged_files
         }
 
