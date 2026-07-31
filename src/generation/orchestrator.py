@@ -769,8 +769,10 @@ class ContextOrchestrator:
     def generate_chat_response(self, target_adapter: str, chat_history: List[Dict[str, str]], temperature: float, llm_overrides: Dict[str, Any] = None) -> Dict[str, Any]:
         start_time = time.time()
         
-        from src.database.secure_storage import SecureStorageManager
-        system_instruction = SecureStorageManager.get_active_prompt("default")
+        system_instruction = (
+            "You are a helpful, intelligent, and articulate AI assistant. "
+            "Provide accurate, clear, and comprehensive answers to the user's questions using clean Markdown formatting."
+        )
 
         overrides = llm_overrides or {}
         deployment_mode = overrides.get("LLM_DEPLOYMENT_MODE", Config.LLM_DEPLOYMENT_MODE)
