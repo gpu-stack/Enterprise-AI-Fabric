@@ -36,9 +36,9 @@ flowchart TD
     HeadingSplitter --> SectionLoop[Iterate Document Sections]
     
     subgraph Parent_Block_Generation ["1. Parent Block Assembly (~1500-2048 Tokens)"]
-        SectionLoop --> TableCheck{Does section contain Markdown Table |--- ?}
+        SectionLoop --> TableCheck{"Does section contain Markdown Table?"}
         TableCheck -- YES --> KeepTableIntact[Keep Entire Table in Single Parent Block<br>Do NOT Split Table Rows]
-        TableCheck -- NO --> SizeCheck{Section Token Count > 2048?}
+        TableCheck -- NO --> SizeCheck{"Section Token Count > 2048?"}
         SizeCheck -- YES --> RecurseSplit[Subdivide via RecursiveCharacterTextSplitter]
         SizeCheck -- NO --> DirectParent[Tag as Parent Context Block]
     end
