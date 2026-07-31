@@ -47,8 +47,7 @@ services:
     container_name: enterprise_ai_fabric_app
     restart: unless-stopped
     ports:
-      - "9090:9090"   # Nginx Frontend UI & API Gateway Reverse Proxy
-      - "9001:9000"   # Direct FastAPI REST Port (Avoid host 9000 conflict)
+      - "9090:9090"   # Nginx Web UI Console & API Gateway Reverse Proxy (Unified Port)
     volumes:
       - app_data:/app/app_data
       - app_uploads:/app/data/uploads

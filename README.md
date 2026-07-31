@@ -198,7 +198,7 @@ http://localhost:9090
 ```
 * **Web SPA Console & API Gateway:** `http://localhost:9090`
 * **Workload & Runtime Tuning Engine:** `http://localhost:9090/tuning`
-* **Direct REST API & Swagger Docs:** `http://localhost:9090/docs` (or `http://localhost:9001/docs`)
+* **Direct REST API & Swagger Docs:** `http://localhost:9090/docs`
 
 ---
 
