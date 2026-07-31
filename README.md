@@ -9,9 +9,9 @@
 [![Qdrant](https://img.shields.io/badge/Qdrant-1.9+-DC2626?style=for-the-badge&logo=qdrant&logoColor=white)](https://qdrant.tech)
 [![Docker](https://img.shields.io/badge/Docker-20.10+-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
 
-Enterprise-RAG-V2 is a production-grade, multi-tenant Retrieval-Augmented Generation (RAG) platform for ingesting, processing, and querying complex, high-density unstructured documents — financial statements, regulatory filings, technical spec sheets, and legal contracts.
+Enterprise-AI-Fabric is a production-grade, multi-tenant Retrieval-Augmented Generation (RAG) platform designed for ingesting, processing, and querying complex, high-density unstructured documents — financial statements, regulatory filings, technical spec sheets, and legal contracts.
 
-It pairs a decoupled **React SPA console** with a **FastAPI control plane**, a containerized **Qdrant** vector store (True Hybrid Search Fusion: Dense + Sparse BM25), decoupled **TEI** embedding/reranking microservices, **Redis** conversation memory, **Celery/Redis** async ingestion, Azure OpenAI / vLLM generation, and an automated **RAGAS** quality-gate.
+It pairs a decoupled **React SPA console** with a **FastAPI control plane**, a containerized **Qdrant** vector store (True Hybrid Search Fusion: Dense + Sparse BM25), decoupled **TEI** embedding/reranking microservices, **Redis** conversation memory, **Celery/Redis** async ingestion, multi-cloud LLM inference (Google Gemini, Azure OpenAI, OpenAI, vLLM, Ollama), and an automated **RAGAS** quality-gate.
 
 ---
 
@@ -21,10 +21,11 @@ It pairs a decoupled **React SPA console** with a **FastAPI control plane**, a c
 3. [Master System Architecture](#3-master-system-architecture)
 4. [Component Documentation](#4-component-documentation)
 5. [Technology Stack](#5-technology-stack)
-6. [Quick Start (Fixed & Verified)](#6-quick-start-fixed--verified)
-7. [Scaling to 100,000 PDFs](#7-scaling-to-100000-pdfs)
-8. [Data Persistence & Security](#8-data-persistence--security)
-9. [Current Status & Honest Roadmap](#9-current-status--honest-roadmap)
+6. [Quick Start & Deployment Guide](#6-quick-start--deployment-guide)
+7. [Workload & Runtime Tuning Engine](#7-workload--runtime-tuning-engine)
+8. [Scaling to 100,000 PDFs](#8-scaling-to-100000-pdfs)
+9. [Data Persistence & Security](#9-data-persistence--security)
+10. [Current Status & Honest Roadmap](#10-current-status--honest-roadmap)
 
 ---
 
@@ -39,9 +40,7 @@ Standard RAG implementations break down in enterprise settings for six specific 
 | 3 | **Stale revision contamination** | Re-uploading an updated policy or Q3 report causes the retriever to mix outdated chunks with the current ones. |
 | 4 | **Pure Dense Vector Noise & Code Misses** | Pure cosine similarity misses exact form IDs, policy numbers, or acronyms while returning semantically near chunks. |
 | 5 | **Multi-Turn Topic Contamination** | Asking a new question on a different topic carries over old history keywords into vector search, causing off-topic hallucinations. |
-| 6 | **Silent quality regression** | Changing a prompt, chunk size, or model can quietly introduce hallucinations with no automated way to catch it. |
-
-**How** each of these is actually solved — not just claimed — is detailed in Section 2, and proven out in the source: `src/processing/`, `src/database/`, `src/generation/`, and `src/evaluation/`.
+| 6 | **Reasoning & Thinking Model Truncation** | Next-gen reasoning models (e.g. Gemini 3.5 Flash, DeepSeek R1) spend tokens on internal thinking traces, causing responses to truncate if `max_tokens` is under 2048. |
 
 ---
 
@@ -62,17 +61,14 @@ Embedded charts and diagrams are cropped, base64-encoded, and sent to a multimod
 ### 🧱 Parent-Child Document Hierarchy
 Small **child chunks** (~300–500 tokens) match queries precisely; their associated **parent block** (~1,500–2,048 tokens) is what actually gets sent to the LLM, so retrieval precision and context completeness stop being a trade-off. → [`src/processing/CHUNKING.md`](src/processing/CHUNKING.md)
 
-### 💬 Multi-Turn Conversation Memory & Topic Isolation
-Redis stores session conversation turns (`src/database/conversation_memory.py`). When history exists, a fast LLM pass (`get_standalone_query`) reformulates the query and **drops prior topic keywords completely** when a user switches topics, preventing vector query contamination. → [`src/generation/README.md`](src/generation/README.md)
+### 🌐 Universal Multi-Cloud & On-Prem LLM Provider Engine
+Native support for **Google Gemini** (`https://generativelanguage.googleapis.com/v1beta/openai`), **Azure OpenAI** (with automatic `api-key` and `Bearer` authentication), **OpenAI Cloud API**, and **On-Premise / Local Inference engines** (vLLM, Ollama, TGI, LocalAI). → [`src/generation/README.md`](src/generation/README.md)
 
-### 🎯 Stage 2 Cross-Encoder Reranking & Quality Badging
-Candidate chunks retrieved from RRF Fusion pass through a TEI Cross-Encoder reranker (`bge-reranker-large`). Every single candidate's score is overwritten with its Cross-Encoder probability and sorted strictly descending, displaying UI Citation Quality Badges (`HIGH_CONFIDENCE`, `MEDIUM_CONFIDENCE`, `LOW_CONFIDENCE`, `UNVERIFIED`). → [`src/generation/README.md`](src/generation/README.md)
+### 💬 ChatGPT-Style Multi-Line Auto-Expanding Textareas
+Interactive input boxes on both **RAG Play Space** (`/query`) and **Raw Chat (MyGPT)** (`/chat`) support `Shift + Enter` line breaks, `Enter` to submit, and auto-expand up to 160px with focus-glow styling.
 
-### ⚡ Sub-20ms Latency Optimizations & GPU Queue Protection
-Bypasses the query rewriter on Turn 1 (0ms latency), limits rewriter generation to `max_tokens=30` and `temperature=0.0` with stop tokens, caps final answer generation at `max_tokens=512`, and bounds LLM context payload to top-4 max context chunks. → [`src/generation/README.md`](src/generation/README.md)
-
-### 📊 Automated RAGAS Quality Gating & Real-Time Observability
-A synthetic QA generator + RAGAS scoring engine grades pipeline changes against Faithfulness, Answer Relevancy, Context Recall, and Context Precision. A unified **Logs & Telemetry Console** provides real-time SLA percentiles (p50, p90, p95, p99) and security audit logs. → [`src/evaluation/README.md`](src/evaluation/README.md)
+### 🧠 Thinking & Reasoning Model Headroom Protection
+Enforces a minimum token floor of **2,048 tokens** (`DEFAULT_MAX_TOKENS = 2048`) to ensure reasoning models (Gemini 3.5 Flash, DeepSeek R1) have sufficient token budget for both internal thinking traces and complete, un-truncated answers.
 
 ---
 
@@ -81,7 +77,7 @@ A synthetic QA generator + RAGAS scoring engine grades pipeline changes against 
 ```mermaid
 graph TD
     User([User / Analyst]) <--> ReactSPA["React SPA Console<br>(TypeScript + Vite)"]
-    ReactSPA <--> FastAPI["FastAPI Control Plane"]
+    ReactSPA <--> FastAPI["FastAPI Control Plane<br>(Nginx Gateway Port 9090)"]
 
     subgraph Async_Ingestion ["Async Ingestion (Celery + Redis)"]
         FastAPI -->|enqueue| Redis[(Redis Broker)]
@@ -108,8 +104,8 @@ graph TD
         FastAPI --> TEI_Rerank["TEI Reranker<br>(bge-reranker-large)"]
     end
 
-    subgraph LLM_Inference ["Generation Engine"]
-        FastAPI <--> LLM{"LLM Provider<br>(Azure OpenAI, Cloud API, or vLLM)"}
+    subgraph LLM_Inference ["Universal Generation Engine"]
+        FastAPI <--> LLM{"LLM Provider<br>(Google Gemini, Azure OpenAI, OpenAI, vLLM, Ollama)"}
     end
 
     subgraph Quality_Audit ["Automated Evaluation"]
@@ -129,9 +125,9 @@ graph TD
 | **Ingestion Pipeline** | Dedup, UUIDv5, revision lineage, async Celery tasks | [`src/processing/INGESTION.md`](src/processing/INGESTION.md) |
 | **Processing Overview** | End-to-end processing service architecture | [`src/processing/README.md`](src/processing/README.md) |
 | **Vector Database & Storage** | Qdrant schema, tenant indexing, encryption, audit vault | [`src/database/README.md`](src/database/README.md) |
-| **Generation & Retrieval** | Standalone query, Cross-Encoder badging, Azure OpenAI support | [`src/generation/README.md`](src/generation/README.md) |
+| **Generation & Retrieval** | Universal LLM endpoint, Cross-Encoder badging, Azure/Gemini support | [`src/generation/README.md`](src/generation/README.md) |
 | **RAGAS Evaluation** | Synthetic QA, quality gate matrix | [`src/evaluation/README.md`](src/evaluation/README.md) |
-| **React Frontend** | Console UI, SLA telemetry, live diagnostics | [`frontend/README.md`](frontend/README.md) |
+| **React Frontend** | Console UI, Workload Tuning, SLA telemetry, ChatGPT textareas | [`frontend/README.md`](frontend/README.md) |
 | **100K PDF Scaling** | Distributed workers, GPU TEI farms, Qdrant sharding | [`docs/100K_PDF_SCALING_ARCHITECTURE.md`](docs/100K_PDF_SCALING_ARCHITECTURE.md) |
 
 ---
@@ -140,7 +136,7 @@ graph TD
 
 | Layer | Technology | Role |
 |---|---|---|
-| Frontend | React 18 + TypeScript + Vite | SSE-streaming console UI & SLA console |
+| Frontend | React 18 + TypeScript + Vite | SSE-streaming console UI, Workload Tuning & SLA console |
 | Backend API | FastAPI + Python 3.11 + Uvicorn | Control plane & orchestrator |
 | Async Task Queue | Celery + Redis | Background document ingestion |
 | Conversation Memory | Redis (`src/database/conversation_memory.py`) | Multi-turn session history |
@@ -170,7 +166,6 @@ git clone https://github.com/gpu-stack/Enterprise-AI-Fabric.git
 cd Enterprise-AI-Fabric
 cp .env.example .env
 ```
-*(Optionally edit `.env` to configure your API keys and target LLM endpoints).*
 
 #### Step 2 — Launch Infrastructure Microservices (Qdrant Vector DB, Embedder, Reranker, Redis)
 ```bash
@@ -187,9 +182,9 @@ docker compose -f docker-compose.app.yml up -d
 ```
 > **What this does:**
 > - Automatically pulls `sandyappdev/enterprise-ai-fabric:latest` from Docker Hub.
-> - Starts the **Central Redis Broker** (`enterprise_rag_redis`).
-> - Starts the **Unified UI & API Gateway** (`enterprise_rag_app`).
-> - Starts the **Celery Async Ingestion Worker** (`enterprise_rag_celery`).
+> - Starts the **Central Redis Broker** (`enterprise_ai_fabric_redis`).
+> - Starts the **Unified UI & API Gateway** (`enterprise_ai_fabric_app`).
+> - Starts the **Celery Async Ingestion Worker** (`enterprise_ai_fabric_celery`).
 
 #### Step 4 — Open the Web Console & Tune Workload
 Open your browser at:
@@ -206,16 +201,24 @@ http://localhost:9090
 
 To build the image locally from source:
 ```bash
-# Build the unified frontend + backend image locally
 docker compose -f docker-compose.app.yml build
-
-# Start the stack
 docker compose -f docker-compose.app.yml up -d
 ```
 
 ---
 
-## 7. Scaling to 100,000 PDFs
+## 7. Workload & Runtime Tuning Engine
+
+Navigate to **`http://localhost:9090/tuning`** to configure live stack parameters without restarting containers:
+
+* **Hardware Preset Profiles:** 1-click optimization presets for **Low-Latency Edge**, **High Reasoning & Policy Analysis**, and **Dense Financial Audit**.
+* **Generation Parameters:** Adjust `DEFAULT_MAX_TOKENS` (default `2048`), `DEFAULT_TEMPERATURE` (`0.0`), and `DEFAULT_REPETITION_PENALTY` (`1.05`).
+* **Retrieval & Reranking Gates:** Set `VECTOR_TOP_K`, `RERANK_TOP_K`, and `RERANKER_SCORE_THRESHOLD` (default `0.40`).
+* **Chunking Geometry:** Adjust `CHUNK_MAX_SIZE` (1200) and `CHUNK_OVERLAP` (200).
+
+---
+
+## 8. Scaling to 100,000 PDFs
 
 At enterprise scale (~100K PDFs, ~5M pages, ~15M vectors), full architecture details and cost tables live in [`docs/100K_PDF_SCALING_ARCHITECTURE.md`](docs/100K_PDF_SCALING_ARCHITECTURE.md).
 
@@ -231,7 +234,7 @@ At enterprise scale (~100K PDFs, ~5M pages, ~15M vectors), full architecture det
 
 ---
 
-## 8. Data Persistence & Security
+## 9. Data Persistence & Security
 
 Encryption keys, connection profiles, tenant metadata, evaluation logs, and audit trails are stored in `./app_data`:
 
@@ -244,18 +247,20 @@ Encryption keys, connection profiles, tenant metadata, evaluation logs, and audi
 
 ---
 
-## 9. Current Status & Honest Roadmap
+## 10. Current Status & Honest Roadmap
 
 **Implemented & Verified:**
 - True Hybrid Search Fusion (Dense + Sparse BM25 via Qdrant RRF)
 - Cross-Encoder Citation Quality Badging (`HIGH_CONFIDENCE`, `MEDIUM_CONFIDENCE`, `LOW_CONFIDENCE`, `UNVERIFIED`)
 - Multi-Turn Redis Conversation Memory & Standalone Query Reformulation
-- Sub-20ms Turn 1 Pre-processing Latency & GPU Queue Protection (`max_tokens=512`)
-- Azure OpenAI Native REST Onboarding (`_build_llm_endpoint_and_headers`)
+- Sub-20ms Turn 1 Pre-processing Latency & GPU Queue Protection
+- Google Gemini & Azure OpenAI Native REST Onboarding (`_build_llm_endpoint_and_headers`)
+- Thinking Model Headroom Protection (`DEFAULT_MAX_TOKENS = 2048` floor)
+- ChatGPT-Style Multi-Line Auto-Expanding Textareas (`Shift + Enter`)
 - SQLite Audit Vault & Dynamic Log Retention Manager
 - Real-Time Enterprise SLA Telemetry Dashboard (p50, p90, p95, p99 percentiles)
-- Live Workload & Runtime Tuning Engine (`/tuning`) with 1-click preset hardware profiles & stack-wise tuning
+- Live Workload & Runtime Tuning Engine (`/tuning`) with 1-click preset hardware profiles
 
-**Roadback Targets:**
+**Roadmap Targets:**
 - Role-based Access Control (RBAC) & JWT API Authentication
 - Multi-region Qdrant cluster autoscaling

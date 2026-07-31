@@ -1,8 +1,8 @@
-# 🖥️ Enterprise-RAG-V2 Decoupled Console Frontend (`frontend/`)
+# 🎨 Enterprise-AI-Fabric Web SPA Console (`frontend/`)
 
 [← Back to main README](../README.md)
 
-A high-performance single-page web console (React 18 + TypeScript + Vite) providing real-time Server-Sent Events (SSE) chat token streaming, timing telemetry, infrastructure SLA diagnostic grids, dynamic IP masking, profile configuration management, and RAGAS quality evaluation dashboards.
+The **Frontend Module** is a decoupled, modern React 18 single-page application written in TypeScript and bundled with Vite. It provides an intuitive interface for multi-tenant document ingestion, interactive grounded RAG search, raw LLM testing, system settings management, live SLA observability telemetry, and real-time workload tuning.
 
 ---
 
@@ -11,106 +11,67 @@ A high-performance single-page web console (React 18 + TypeScript + Vite) provid
 ```
 frontend/
 ├── src/
-│   ├── components/       # UI components (ChatConsole, TelemetryGrid, ConfigModal, Diagnostics)
-│   ├── App.tsx           # Main application console view
-│   ├── main.tsx          # React application entrypoint
-│   └── index.css         # Styling system & dark theme tokens
-├── package.json          # Node dependencies (Vite, React, Lucide Icons)
-├── vite.config.ts        # Vite dev server & proxy settings
-└── README.md             # Frontend Console Documentation
+│   ├── pages/
+│   │   ├── Query.tsx           # Grounded RAG Play space with citation quality badges & ChatGPT-style textareas
+│   │   ├── Chat.tsx            # MyGPT Non-RAG direct chat playground
+│   │   ├── WorkloadTuning.tsx  # Live Workload & Runtime Tuning Engine with 1-click preset hardware profiles
+│   │   ├── Ingestion.tsx       # Document upload, dropzone, and Celery task status monitoring
+│   │   ├── DocumentLibrary.tsx # Active document management & partition filtering
+│   │   ├── Summarize.tsx       # AI Document Summarizer
+│   │   ├── Evaluation.tsx      # RAGAS Quality Gate & synthetic test set evaluator
+│   │   ├── Analytics.tsx       # Analytics & system usage metrics
+│   │   ├── Settings.tsx        # System Settings & LLM connection profile onboarding
+│   │   └── LogsConsole.tsx     # Real-time SLA Telemetry Console & audit log vault
+│   ├── useAppLogic.tsx         # Central application state, tenant scope context, and SSE streaming handlers
+│   ├── App.tsx                 # Core router & navigation shell
+│   ├── App.css                 # Styling system, responsive grid layouts, and textarea auto-expansion
+│   └── main.tsx                # Application entry point
+├── package.json                # Dependencies (Lucide React, Vite, TypeScript)
+└── README.md                   # Frontend Documentation
 ```
 
 ---
 
-## 📌 1. What & Why?
+## 📌 Key Features & Capabilities
 
-### What it Does
-* **Real-Time Token Streaming**: Uses native browser Fetch Stream Readers to consume Server-Sent Events (`text/event-stream`) for zero-lag token rendering.
-* **Latency & SLA Telemetry Split-Pane**: Displays granular execution metrics for every query:
-  * **Time-to-First-Token (TTFT)**
-  * **Embedding Duration**
-  * **Qdrant Vector Search Duration**
-  * **TEI Reranker Duration**
-  * **Generation Rate (Tokens/sec)**
-* **Infrastructure Telemetry & SLA Warning Grid**: Executes one-click system health checks against active endpoints (Qdrant, TEI Embedder, TEI Reranker, LLM provider). Latencies exceeding SLA thresholds are flagged in amber/red.
-* **Interactive IP Address Masking**: Automatically obfuscates backend IP addresses (`***.***.***.***`) in public UI cards, with click-to-reveal toggles to protect sensitive infra topologies during screenshots.
-* **Dynamic Environment Configuration Modal**: Interfaces with the backend Fernet encryption storage to manage active deployment profiles without server restarts.
+### 💬 1. Grounded RAG Play Space (`/query`)
+* **Interactive SSE Streaming:** Real-time token streaming with live Server-Sent Events (SSE).
+* **ChatGPT-Style Multi-Line Textarea:** Supports `Shift + Enter` line breaks, `Enter` to submit, auto-expands up to 160px with focus-glow styling.
+* **Citation Quality Badging:** Displays color-coded relevance badges for retrieved document chunks:
+  * 🟢 **`HIGH_CONFIDENCE`** ($\ge 0.70$)
+  * 🟡 **`MEDIUM_CONFIDENCE`** ($0.40 - 0.69$)
+  * 🔴 **`LOW_CONFIDENCE`** ($< 0.40$)
+* **Query Execution Trace Drawer:** Expandable sidebar showing vector pre-fetch metrics, Cross-Encoder score distributions, TTFT (Time-To-First-Token), and generation velocity (tokens/sec).
 
-### Why We Built It This Way
-Enterprise AI consoles must deliver both fast user UX and operational transparency:
-1. **Decoupled Architecture**: Hosting the SPA independently allows edge CDN distribution and isolates client UI rendering from heavy backend python ingestion worker nodes.
-2. **Telemetry Visibility**: Analysts need to understand why a query was slow. Split-pane telemetry isolates latency down to specific microservices (e.g. identifying if delay was in vector search vs reranking vs LLM generation).
+### 🤖 2. MyGPT Non-RAG Raw Chat (`/chat`)
+* Direct model inference playground bypassing Qdrant context retrieval.
+* Useful for raw model alignment testing, general queries, and prompt experimentation.
+* Features multi-line `Shift + Enter` textarea input.
 
----
+### ⚙️ 3. Workload & Runtime Tuning Engine (`/tuning`)
+* **1-Click Preset Hardware Profiles:**
+  * **Low-Latency Edge:** Optimized for fast small-model execution (`max_tokens: 512`, `VECTOR_TOP_K: 10`).
+  * **High Reasoning & Policy Analysis:** Optimized for deep policy evaluation (`max_tokens: 2048`, `VECTOR_TOP_K: 20`).
+  * **Dense Financial Audit:** High recall profile for complex balance sheet verification (`VECTOR_TOP_K: 30`, `RERANK_TOP_K: 10`).
+* **Live Stack Settings Sync:** Dynamically updates backend configuration without container restarts.
 
-## 🏛️ 2. Architectural Structure & SSE Stream Processing
-
-```mermaid
-flowchart TD
-    User[User / Analyst] <--> ReactUI[React SPA Console<br>Vite + TypeScript]
-    
-    subgraph UI_Components ["Frontend Component Tree"]
-        ReactUI --> ChatWindow[Chat & Stream Console]
-        ReactUI --> TelemetryPane[Telemetry & Execution Metrics Pane]
-        ReactUI --> DiagGrid[Infrastructure Diagnostics Grid]
-        ReactUI --> ConfigModal[Encrypted Profile Config Modal]
-    end
-
-    subgraph Stream_Processing ["Fetch SSE Event Stream Reader"]
-        ChatWindow -->|POST /chat/stream| Backend[FastAPI Control Plane]
-        Backend -- text/event-stream --> StreamBuffer[ReadableStream Reader]
-        StreamBuffer --> ParseTelemetry[Parse Header Telemetry -> Update Metrics Pane]
-        StreamBuffer --> ParseTokens[Parse Token Chunks -> Append to Chat Stream]
-    end
-
-    subgraph Security ["Interactive IP Obfuscation"]
-        DiagGrid --> IPMask{IP Mask Enabled?}
-        IPMask -- YES --> DisplayObfuscated["Display ***.***.***.***"]
-        IPMask -- NO --> DisplayRaw[Display Raw Gateway IP]
-    end
-```
+### 📊 4. SLA Telemetry & Audit Vault (`/logs`)
+* Live percentile SLA metrics: **p50**, **p90**, **p95**, **p99** request latencies.
+* Real-time query execution log stream and admin security audit trail.
 
 ---
 
-## 🔍 3. How It Works: Technical Deep-Dive
+## 🛠️ Development & Build Commands
 
-### A. Fetch Stream Reader Implementation
-```typescript
-const response = await fetch('/api/chat/stream', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ query, tenant_id: activeTenant })
-});
+```bash
+# Install dependencies
+npm install
 
-const reader = response.body?.getReader();
-const decoder = new TextDecoder();
+# Start local development server (with Vite HMR)
+npm run dev
 
-while (true) {
-  const { done, value } = await reader.read();
-  if (done) break;
-  const chunk = decoder.decode(value);
-  // Parse data: {"type": "token", "content": "..."}
-}
+# Type check & build production bundle
+npm run build
 ```
 
-### B. Diagnostics SLA Warning SLA Thresholds
-* **Qdrant Search SLA**: Warning if latency > `100ms`.
-* **TEI Reranker SLA**: Warning if latency > `300ms`.
-* **TTFT SLA**: Warning if Time-to-First-Token > `500ms`.
-
----
-
-## ⚡ 4. How to Scale Frontend for 100,000 PDFs / Enterprise Users
-
-```mermaid
-graph TD
-    Users[1,000 Concurrent Enterprise Users] --> Cloudflare[Cloudflare Edge CDN]
-    Cloudflare --> StaticBucket[S3 Static Asset Bucket<br>Vite Compiled React SPA]
-    
-    Users --> WSGateway[WebSocket / SSE Load Balancer<br>NGINX / AWS ALB]
-    WSGateway --> BackendNodes[FastAPI Control Plane Pool]
-```
-
-### Key Scaling Interventions:
-1. **Edge CDN Distribution**: Compile Vite assets (`npm run build`) and serve `dist/` via Cloudflare or Amazon CloudFront for sub-20ms page load times worldwide.
-2. **Virtualized Chat History**: Use `@tanstack/react-virtual` to render large chat logs containing thousands of tokens with zero DOM lag.
+When building production containers, Vite compiles assets into `dist/`, which Nginx serves on host port **9090** (`http://localhost:9090`).
