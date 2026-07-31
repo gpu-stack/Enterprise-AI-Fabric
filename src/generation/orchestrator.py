@@ -279,12 +279,12 @@ class ContextOrchestrator:
                 else:
                     target_model = default_model
 
-            max_out = int(overrides.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS) or 1024)
+            max_out = int(overrides.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS) or 2048)
             vllm_payload = {
                 "model": target_model,
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": max_out if max_out >= 256 else 1024
+                "max_tokens": max_out if max_out >= 1024 else 2048
             }
             
             # Enforce strict local structural bounds to prevent token drift
@@ -536,12 +536,12 @@ class ContextOrchestrator:
                 else:
                     target_model = default_model
 
-            max_out = int(overrides.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS) or 1024)
+            max_out = int(overrides.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS) or 2048)
             vllm_payload = {
                 "model": target_model,
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": max_out if max_out >= 256 else 1024
+                "max_tokens": max_out if max_out >= 1024 else 2048
             }
             
             if provider_type not in ["Cloud API"]:
@@ -776,11 +776,12 @@ class ContextOrchestrator:
         vllm_endpoint, request_headers = self._build_llm_endpoint_and_headers(api_base_url, api_key, provider_type)
         target_model = default_model or target_adapter or "gemini-3.5-flash"
 
+        max_out = int(overrides.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS) or 2048)
         vllm_payload = {
             "model": target_model,
             "messages": [{"role": "system", "content": system_instruction}] + chat_history,
             "temperature": temperature,
-            "max_tokens": 1024
+            "max_tokens": max_out if max_out >= 1024 else 2048
         }
 
         try:

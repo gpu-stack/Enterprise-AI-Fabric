@@ -39,7 +39,7 @@ class Config:
     LLM_API_BASE_URL = os.getenv("LLM_API_BASE_URL", "http://localhost:8000/v1").rstrip("/")
     LLM_API_KEY = os.getenv("LLM_API_KEY", "none")
     DEFAULT_MODEL_ID = os.getenv("DEFAULT_MODEL_ID", "gemini-1.5-pro")
-    DEFAULT_MAX_TOKENS = int(os.getenv("DEFAULT_MAX_TOKENS", "512"))
+    DEFAULT_MAX_TOKENS = int(os.getenv("DEFAULT_MAX_TOKENS", "2048"))
     DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.0"))
     DEFAULT_REPETITION_PENALTY = float(os.getenv("DEFAULT_REPETITION_PENALTY", "1.05"))
 

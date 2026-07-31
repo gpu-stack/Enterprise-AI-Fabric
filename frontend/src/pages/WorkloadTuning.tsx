@@ -18,7 +18,7 @@ export const WorkloadTuning = () => {
     DEFAULT_MODEL_ID: 'gemini-3.5-flash',
     LLM_API_BASE_URL: 'https://generativelanguage.googleapis.com/v1beta/openai',
     LLM_API_KEY: 'none',
-    DEFAULT_MAX_TOKENS: 512,
+    DEFAULT_MAX_TOKENS: 2048,
     DEFAULT_TEMPERATURE: 0.0,
     DEFAULT_REPETITION_PENALTY: 1.05,
 
