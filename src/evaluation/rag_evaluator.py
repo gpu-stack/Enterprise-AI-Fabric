@@ -9,7 +9,7 @@ from datasets import Dataset
 from ragas import evaluate
 from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
 from langchain_community.chat_models import ChatOllama
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, AzureChatOpenAI
 from langchain_core.messages import AIMessage
 from langchain_core.embeddings import Embeddings
 from src.processing.semantic_splitter import TEIEmbeddingClient
@@ -17,6 +17,7 @@ from src.database.query_engine import MultiTenantQueryEngine
 from src.generation.orchestrator import ContextOrchestrator
 from src.config import settings
 from src.utils.logger import logger as sys_logger
+import urllib.parse
 
 class Prometheus2ChatOllama(ChatOllama):
     """Custom ChatOllama subclass that intercepts and converts Prometheus 2 outputs to expected Ragas schemas."""
@@ -113,15 +114,41 @@ class RAGEvaluator:
 
         eval_api_key = self.api_key if (self.api_key and self.api_key.lower() != "none") else "dummy_key"
 
-        self.eval_llm = ChatOpenAI(
-            model=model_name,
-            openai_api_key=eval_api_key,
-            openai_api_base=self.api_base_url,
-            temperature=0.0,
-            request_timeout=120.0,
-            max_retries=3,
-            n=1
-        )
+        if "openai.azure.com" in self.api_base_url or "azure" in provider_type.lower():
+            parsed_url = urllib.parse.urlparse(self.api_base_url)
+            azure_endpoint = f"{parsed_url.scheme}://{parsed_url.netloc}"
+            
+            deployment_name = self.default_model or "gpt-4"
+            if "/deployments/" in parsed_url.path:
+                parts = parsed_url.path.split("/deployments/")
+                if len(parts) > 1 and parts[1].split("/")[0]:
+                    deployment_name = parts[1].split("/")[0]
+
+            api_version = "2024-02-15-preview"
+            if "api-version=" in self.api_base_url:
+                qs = urllib.parse.parse_qs(parsed_url.query)
+                if "api-version" in qs and qs["api-version"][0]:
+                    api_version = qs["api-version"][0]
+
+            self.eval_llm = AzureChatOpenAI(
+                azure_endpoint=azure_endpoint,
+                azure_deployment=deployment_name,
+                api_version=api_version,
+                api_key=eval_api_key,
+                temperature=0.0,
+                request_timeout=120.0,
+                max_retries=3
+            )
+        else:
+            self.eval_llm = ChatOpenAI(
+                model=model_name,
+                openai_api_key=eval_api_key,
+                openai_api_base=self.api_base_url,
+                temperature=0.0,
+                request_timeout=120.0,
+                max_retries=3,
+                n=1
+            )
 
         embedding_url = self.overrides.get("EMBEDDING_SERVER_URL") or getattr(settings, "EMBEDDING_SERVER_URL", settings.EMBEDDING_API_URL)
         tei_client = TEIEmbeddingClient(embedding_url)
