@@ -22,7 +22,7 @@ services:
     container_name: enterprise_ai_fabric_redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-63799}:6379"   # Overridable host port (default 63799 to prevent host 6379 conflicts)
     networks:
       - rag_network
     extra_hosts:
