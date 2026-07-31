@@ -235,13 +235,20 @@ export const Chat = () => {
 
             <div className="chat-input-wrapper">
               <div className="chat-input-capsule">
-                <input 
-                  type="text"
+                <textarea 
+                  rows={1}
                   value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  placeholder="Message MyGPT..."
+                  onChange={(e) => {
+                    setChatInput(e.target.value);
+                    e.target.style.height = 'auto';
+                    e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+                  }}
+                  placeholder="Message MyGPT... (Shift + Enter for multi-line)"
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSendChat();
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSendChat();
+                    }
                   }}
                   disabled={isChatting}
                 />
@@ -249,7 +256,7 @@ export const Chat = () => {
                   className="btn btn-primary"
                   onClick={handleSendChat}
                   disabled={isChatting}
-                  style={{ padding: '0.4rem 1.2rem', borderRadius: '18px', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                  style={{ padding: '0.5rem 1.2rem', borderRadius: '16px', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '2px' }}
                 >
                   <Send size={14} /> Send
                 </button>

@@ -390,13 +390,20 @@ export const Query = () => {
 
                 <div className="chat-input-wrapper">
                   <div className="chat-input-capsule">
-                    <input 
-                      type="text"
+                    <textarea 
+                      rows={1}
                       value={queryText}
-                      onChange={(e) => setQueryText(e.target.value)}
-                      placeholder="Ask a question about the active workspace index..."
+                      onChange={(e) => {
+                        setQueryText(e.target.value);
+                        e.target.style.height = 'auto';
+                        e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+                      }}
+                      placeholder="Ask a question about the active workspace index... (Shift + Enter for multi-line)"
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleQuerySubmit();
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleQuerySubmit();
+                        }
                       }}
                       disabled={isQuerying}
                     />
@@ -404,7 +411,7 @@ export const Query = () => {
                       className="btn btn-primary"
                       onClick={() => handleQuerySubmit()}
                       disabled={isQuerying}
-                      style={{ padding: '0.4rem 1.2rem', borderRadius: '18px', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                      style={{ padding: '0.5rem 1.2rem', borderRadius: '16px', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '2px' }}
                     >
                       <Send size={14} /> Send
                     </button>
