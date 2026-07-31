@@ -279,11 +279,12 @@ class ContextOrchestrator:
                 else:
                     target_model = default_model
 
+            max_out = int(overrides.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS) or 1024)
             vllm_payload = {
                 "model": target_model,
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": 512
+                "max_tokens": max_out if max_out >= 256 else 1024
             }
             
             # Enforce strict local structural bounds to prevent token drift
@@ -476,25 +477,15 @@ class ContextOrchestrator:
             else:
                 ref_docs_str = "No verified context detected.\n\n--------------------------------\n\n"
 
-            from src.database.secure_storage import SecureStorageManager
-            custom_prompt = SecureStorageManager.get_active_prompt(tenant_id)
             system_instruction = (
-                f"<system_instructions>\n"
-                f"You are an Enterprise HR Operations Assistant operating in workspace [{tenant_id.upper()}]. Your ONLY task is to answer the user query strictly using the provided reference context.\n\n"
-                f"<critical_rules>\n"
-                f"1. STRICT TOPIC MATCHING: Before drafting an answer, verify if the provided context directly addresses the SPECIFIC topic in the user query (e.g., if the user asks about \"car lease\", the context MUST contain car lease policies).\n"
-                f"2. DO NOT ANSWER OFF-TOPIC CONTEXT: If the provided context belongs to a different HR topic (e.g., medical claims, leave rules) than what was explicitly asked (e.g., car lease), treat the context as COMPLETELY IRRELEVANT.\n"
-                f"3. EXACT FALLBACK TRIGGER: If the context is irrelevant or does not contain direct policy details for the specific requested topic, respond ONLY with this exact sentence and nothing else:\n"
-                f"   \"The requested information regarding this topic is not available in the provided documents. Please reach out to your HR Business Partner for assistance.\"\n"
-                f"4. ZERO FLUFF: Provide direct, dense, and complete policy answers. Avoid conversational preamble, filler transitions, or redundant pleasantries.\n"
-                f"</critical_rules>\n\n"
-                f"<output_format>\n"
-                f"- State the direct answer in the very first sentence using pure extracted facts.\n"
-                f"- Present multi-step rules or structured guidelines using clean Markdown bullet points (-).\n"
-                f"- Bold exact deadlines, approval roles, or document names.\n"
-                f"</output_format>\n"
-                f"</system_instructions>\n\n"
-                f"{custom_prompt}"
+                f"You are an Enterprise AI Assistant operating in workspace [{tenant_id.upper()}].\n"
+                f"Your core task is to answer the user query completely, accurately, and thoroughly using ONLY the provided reference context.\n\n"
+                f"### CORE GUIDELINES & FORMATTING:\n"
+                f"1. GROUNDED & FACTUAL: Base your answer strictly on the facts in the provided reference context. Do not invent rules or infer unstated policy details.\n"
+                f"2. THOROUGH & COMPLETE: Provide direct, detailed explanations including all eligibility requirements, multi-step procedures, deadlines, contacts, and guidelines mentioned in the documents. Do not truncate your answer.\n"
+                f"3. CLEAN MARKDOWN: Format your response clearly using Markdown bullet points (-), bold text (**terms**), and numbered lists where appropriate.\n"
+                f"4. FALLBACK RULE: If the reference documents do not contain relevant information to answer the question, respond ONLY with:\n"
+                f"   \"The requested information regarding this topic is not available in the provided documents. Please reach out to your HR/Operations team for assistance.\""
             )
 
             user_payload = (
@@ -545,11 +536,12 @@ class ContextOrchestrator:
                 else:
                     target_model = default_model
 
+            max_out = int(overrides.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS) or 1024)
             vllm_payload = {
                 "model": target_model,
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": 512
+                "max_tokens": max_out if max_out >= 256 else 1024
             }
             
             if provider_type not in ["Cloud API"]:
@@ -568,7 +560,7 @@ class ContextOrchestrator:
                 llm_start = time.perf_counter_ns()
                 first_chunk_received = False
                 
-                with httpx.stream("POST", vllm_endpoint, json=vllm_payload, headers=request_headers, timeout=15.0) as r:
+                with httpx.stream("POST", vllm_endpoint, json=vllm_payload, headers=request_headers, timeout=60.0) as r:
                     r.raise_for_status()
                     for line in r.iter_lines():
                         if not first_chunk_received:
