@@ -1057,13 +1057,11 @@ async def query_tenant_rag(tenant_id: str, payload: Dict[str, Any]):
 async def chat_tenant(tenant_id: str, payload: Dict[str, Any]):
     """Executes a conversational chat prompt against the active tenant domain (non-RAG direct chat)."""
     registry = SecureStorageManager.load_tenant_registry()
-    if tenant_id not in registry:
-        raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found.")
+    adapter_matrix = registry.get(tenant_id, tenant_id)
         
     chat_history = payload.get("chat_history", [])
     temperature = float(payload.get("temperature", 0.7))
     
-    adapter_matrix = registry[tenant_id]
     llm_cfg = get_active_llm_config()
     
     res = orchestrator.generate_chat_response(

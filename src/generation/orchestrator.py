@@ -38,21 +38,19 @@ class ContextOrchestrator:
         self.query_engine = MultiTenantQueryEngine()
 
     def _build_llm_endpoint_and_headers(self, api_base_url: str, api_key: str, provider_type: str) -> tuple:
-        """Constructs valid REST endpoint URL and authentication headers supporting Azure OpenAI, Cloud APIs, and vLLM."""
-        base_url = api_base_url.strip().rstrip('/')
+        """Constructs valid REST endpoint URL and authentication headers supporting Azure OpenAI, Cloud APIs (Gemini/OpenAI), and vLLM/Ollama."""
+        base_url = (api_base_url or "").strip().rstrip('/')
+        p_type = (provider_type or "").lower()
         
-        if "openai.azure.com" in base_url or "azure" in provider_type.lower():
-            if "/chat/completions" in base_url:
-                vllm_endpoint = base_url
-            else:
-                if "api-version" not in base_url:
-                    vllm_endpoint = f"{base_url}/chat/completions?api-version=2024-02-15-preview"
-                else:
-                    vllm_endpoint = f"{base_url}/chat/completions"
-        elif base_url.endswith("/chat/completions"):
+        if "/chat/completions" in base_url:
             vllm_endpoint = base_url
+        elif "openai.azure.com" in base_url or "azure" in p_type:
+            if "api-version" not in base_url:
+                vllm_endpoint = f"{base_url}/chat/completions?api-version=2024-02-15-preview"
+            else:
+                vllm_endpoint = f"{base_url}/chat/completions"
         else:
-            if provider_type in ["Ollama", "OpenAI-Compatible"] and not base_url.endswith("/v1") and "/v1/" not in base_url:
+            if ("ollama" in p_type or "openai" in p_type or "vllm" in p_type) and not base_url.endswith("/v1") and "/v1/" not in base_url and "generativelanguage.googleapis.com" not in base_url:
                 base_url = f"{base_url}/v1"
             vllm_endpoint = f"{base_url}/chat/completions"
 
@@ -682,13 +680,10 @@ class ContextOrchestrator:
         api_base_url = overrides.get("LLM_API_BASE_URL", Config.LLM_API_BASE_URL)
         api_key = overrides.get("LLM_API_KEY", Config.LLM_API_KEY)
         default_model = overrides.get("DEFAULT_MODEL_ID", Config.DEFAULT_MODEL_ID)
-
         provider_type = overrides.get("PROVIDER_TYPE", "Cloud API" if deployment_mode == "CLOUD" else "vLLM")
-        base_url = api_base_url.rstrip('/')
-        if provider_type in ["Ollama", "OpenAI-Compatible"] and not base_url.endswith("/v1") and "/v1/" not in base_url:
-            base_url = f"{base_url}/v1"
-        vllm_endpoint = f"{base_url}/chat/completions"
-        target_model = default_model or "meta/llama-3.1-8b-instruct"
+
+        vllm_endpoint, request_headers = self._build_llm_endpoint_and_headers(api_base_url, api_key, provider_type)
+        target_model = default_model or "gemini-3.5-flash"
 
         vllm_payload = {
             "model": target_model,
@@ -782,43 +777,10 @@ class ContextOrchestrator:
         api_base_url = overrides.get("LLM_API_BASE_URL", Config.LLM_API_BASE_URL)
         api_key = overrides.get("LLM_API_KEY", Config.LLM_API_KEY)
         default_model = overrides.get("DEFAULT_MODEL_ID", Config.DEFAULT_MODEL_ID)
-
         provider_type = overrides.get("PROVIDER_TYPE", "Cloud API" if deployment_mode == "CLOUD" else "vLLM")
-        base_url = api_base_url.rstrip('/')
-        if provider_type in ["Ollama", "OpenAI-Compatible"] and not base_url.endswith("/v1") and "/v1/" not in base_url:
-            base_url = f"{base_url}/v1"
-        vllm_endpoint = f"{base_url}/chat/completions"
-        if provider_type in ["Ollama", "OpenAI-Compatible", "Cloud API"]:
-            target_model = default_model
-        else:
-            live_models = []
-            try:
-                url = f"{base_url.rstrip('/')}/models"
-                if "/v1" not in url and "/v1/" not in url:
-                    url_v1 = f"{base_url.rstrip('/')}/v1/models"
-                    try:
-                        req = urllib.request.Request(url_v1, method="GET")
-                        if api_key and api_key.lower() != "none":
-                            req.add_header("Authorization", f"Bearer {api_key}")
-                        with urllib.request.urlopen(req, timeout=1.5) as res:
-                            data = json.loads(res.read().decode("utf-8"))
-                            live_models = [m["id"] for m in data.get("data", [])]
-                    except Exception:
-                        pass
-                if not live_models:
-                    req = urllib.request.Request(url, method="GET")
-                    if api_key and api_key.lower() != "none":
-                        req.add_header("Authorization", f"Bearer {api_key}")
-                    with urllib.request.urlopen(req, timeout=1.5) as res:
-                        data = json.loads(res.read().decode("utf-8"))
-                        live_models = [m["id"] for m in data.get("data", [])]
-            except Exception:
-                pass
-            
-            if target_adapter in live_models:
-                target_model = target_adapter
-            else:
-                target_model = default_model
+
+        vllm_endpoint, request_headers = self._build_llm_endpoint_and_headers(api_base_url, api_key, provider_type)
+        target_model = default_model or target_adapter or "gemini-3.5-flash"
 
         vllm_payload = {
             "model": target_model,
@@ -826,10 +788,6 @@ class ContextOrchestrator:
             "temperature": temperature,
             "max_tokens": 1024
         }
-
-        request_headers = {"Content-Type": "application/json"}
-        if api_key and api_key.lower() != "none":
-            request_headers["Authorization"] = f"Bearer {api_key}"
 
         try:
             req = urllib.request.Request(vllm_endpoint, data=json.dumps(vllm_payload).encode("utf-8"), headers=request_headers, method="POST")

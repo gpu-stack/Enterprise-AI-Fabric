@@ -15,11 +15,10 @@ class LayoutAwareParser:
     @staticmethod
     def _describe_image_via_gemini(image_base64: str) -> str:
         """Calls the OpenAI-compatible multimodal endpoint of Gemini 3.5 Flash to describe an image."""
-        url = f"{Config.LLM_API_BASE_URL}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {Config.LLM_API_KEY}"
-        }
+        from src.generation.orchestrator import orchestrator
+        url, headers = orchestrator._build_llm_endpoint_and_headers(
+            Config.LLM_API_BASE_URL, Config.LLM_API_KEY, "Cloud API"
+        )
         
         payload = {
             "model": Config.DEFAULT_MODEL_ID or "gemini-3.5-flash",

@@ -277,21 +277,15 @@ class RAGEvaluator:
             return []
 
         import requests
+        from src.generation.orchestrator import orchestrator
         from src.database.secure_storage import SecureStorageManager
-        
         api_base = self.api_base_url
         api_key = self.api_key
         default_model = self.default_model
         deployment_mode = self.deployment_mode
-        
         provider_type = self.overrides.get("PROVIDER_TYPE", "Cloud API" if deployment_mode == "CLOUD" else "vLLM")
-        base_url = api_base.rstrip('/')
-        if provider_type in ["Ollama", "OpenAI-Compatible"] and not base_url.endswith("/v1") and "/v1/" not in base_url:
-            base_url = f"{base_url}/v1"
-        vllm_endpoint = f"{base_url}/chat/completions"
-        headers = {"Content-Type": "application/json"}
-        if api_key and api_key.lower() != "none":
-            headers["Authorization"] = f"Bearer {api_key}"
+
+        vllm_endpoint, headers = orchestrator._build_llm_endpoint_and_headers(api_base, api_key, provider_type)
 
         test_cases = []
         total_rows = len(chunks)
