@@ -47,7 +47,7 @@ services:
     container_name: enterprise_ai_fabric_app
     restart: unless-stopped
     ports:
-      - "9090:9090"   # Nginx Web UI Console & API Gateway Reverse Proxy (Unified Port)
+      - "${APP_PORT:-9090}:9090"   # Nginx Web UI Console & API Gateway (Overridable via APP_PORT env var)
     volumes:
       - app_data:/app/app_data
       - app_uploads:/app/data/uploads
