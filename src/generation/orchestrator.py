@@ -675,7 +675,8 @@ class ContextOrchestrator:
         provider_type = overrides.get("PROVIDER_TYPE", "Cloud API" if deployment_mode == "CLOUD" else "vLLM")
 
         vllm_endpoint, request_headers = self._build_llm_endpoint_and_headers(api_base_url, api_key, provider_type)
-        target_model = default_model or "gemini-3.5-flash"
+        # Always use configured model — never fall back to a hardcoded model name
+        target_model = default_model or Config.DEFAULT_MODEL_ID or "gemini-2.0-flash"
 
         vllm_payload = {
             "model": target_model,
@@ -686,10 +687,7 @@ class ContextOrchestrator:
             "temperature": 0.2,
             "max_tokens": max_tokens
         }
-
-        request_headers = {"Content-Type": "application/json"}
-        if api_key and api_key.lower() != "none":
-            request_headers["Authorization"] = f"Bearer {api_key}"
+        # Note: request_headers already built above (includes Azure api-key) — do NOT rebuild here
 
         try:
             req = urllib.request.Request(vllm_endpoint, data=json.dumps(vllm_payload).encode("utf-8"), headers=request_headers, method="POST")
