@@ -48,7 +48,7 @@ EXPOSE 9090 9000
 
 # Health check endpoint
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost:9090/api/health || exit 1
+  CMD curl -f http://localhost:9000/api/system/health || exit 1
 
 # Launch Supervisor Process Orchestrator
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

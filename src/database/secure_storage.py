@@ -82,21 +82,14 @@ class SecureStorageManager:
     @classmethod
     def load_tenant_registry(cls) -> dict:
         if not os.path.exists(REGISTRY_FILE):
-            # Seed and save default settings
-            default_registry = {
-                "finance_reasoning": "finance_reasoning",
-                "tech_support": "tech_support"
-            }
-            cls.save_tenant_registry(default_registry)
-            return default_registry
+            # Start with an empty registry on fresh deployments — no demo tenants
+            cls.save_tenant_registry({})
+            return {}
         try:
             with open(REGISTRY_FILE, "r") as f:
                 return json.load(f)
         except Exception:
-            return {
-                "finance_reasoning": "finance_reasoning",
-                "tech_support": "tech_support"
-            }
+            return {}
 
     EVAL_RUNS_FILE = os.path.join(DATA_DIR, "eval_runs.json")
 

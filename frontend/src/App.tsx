@@ -225,7 +225,9 @@ const AppLayout = () => {
     getActiveAdapterLabel,
     getLatestAssistantMessage,
     getEmbeddingLabel,
-    getRerankerLabel
+    getRerankerLabel,
+    isBackendReachable,
+    isOnboarding
   } = useAppLogic();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -244,10 +246,10 @@ const AppLayout = () => {
     fetchConfig();
     fetchAvailableModels();
     
-    // Poll health periodically
+    // ISSUE 6 FIX: Poll health every 30s using lightweight ping so interval doesn't block UI
     const healthInterval = setInterval(() => {
       fetchHealth();
-    }, 15000);
+    }, 30000);
 
     return () => clearInterval(healthInterval);
   }, []);
@@ -277,6 +279,18 @@ const AppLayout = () => {
 
   return (
     <div className="app-container">
+      {/* ISSUE 6: Backend Offline Banner — shown when the circuit breaker detects unreachability */}
+      {!isBackendReachable && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+          background: 'linear-gradient(90deg, #b91c1c, #dc2626)',
+          color: '#fff', textAlign: 'center', padding: '10px 16px',
+          fontSize: '0.875rem', fontWeight: 600, letterSpacing: '0.02em',
+          boxShadow: '0 2px 12px rgba(185,28,28,0.4)'
+        }}>
+          ⚠️ Backend Unreachable — API server is offline or starting up. Some features are disabled.
+        </div>
+      )}
       {/* Mobile Header (visible only on small screens) */}
       <div className="mobile-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

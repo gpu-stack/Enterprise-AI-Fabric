@@ -21,6 +21,7 @@ app_data/*.db
 app_data/*.db-wal
 app_data/*.db-shm
 app_data/*.jsonl
+app_data/*.json
 app_data/logs/
 app_data/observability.db
 app_data/audit_vault.jsonl

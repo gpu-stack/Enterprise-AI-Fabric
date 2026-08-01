@@ -22,6 +22,26 @@ const safeJson = async (res: Response): Promise<any> => {
   }
 };
 
+/**
+ * ISSUE 6 FIX: Fetch with AbortController timeout.
+ * Prevents any API call from hanging the UI indefinitely when the backend is unreachable.
+ * Default timeout: 8 seconds. Streaming endpoints should pass a higher value or Infinity.
+ */
+const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutMs = 8000): Promise<Response> => {
+  if (timeoutMs === Infinity) return fetch(url, options);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timer);
+    return res;
+  } catch (e) {
+    clearTimeout(timer);
+    throw e;
+  }
+};
+
+
 
 export const useAppLogic = () => {
   const store = useStore();
@@ -177,6 +197,13 @@ const [activeTab, setActiveTab] = useState<string>('query');
   const [isDetailedMetricsExpanded, setIsDetailedMetricsExpanded] = useState<boolean>(false);
   const [lastRefreshed, setLastRefreshed] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  // ISSUE 6 FIX: global backend reachability flag — disables further API calls if backend is down
+  const [isBackendReachable, setIsBackendReachable] = useState<boolean>(true);
+  // ISSUE 5 FIX: loading spinner for model onboard flow
+  const [isOnboarding, setIsOnboarding] = useState<boolean>(false);
+
+  // ISSUE 7 FIX: debounce ref to prevent spam Qdrant calls on rapid tenant switching
+  const tenantDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Tenant Provisioning Administration
   const [newTenantId, setNewTenantId] = useState<string>('');
@@ -187,16 +214,20 @@ const [activeTab, setActiveTab] = useState<string>('query');
     localStorage.setItem('theme', theme);
   }, [theme]);
 
-  // Fetch initial telemetry on component mount
+  // ISSUE 1 FIX: Use Promise.allSettled so one slow/failed fetch doesn't block the others.
+  // Each individual fetch uses fetchWithTimeout to avoid hanging the event loop.
   useEffect(() => {
-    fetchHealth();
-    fetchTenants();
-    fetchConfig();
-    fetchProfiles();
-    fetchAvailableModels();
-    fetchEvalRuns();
-    const now = new Date();
-    setLastRefreshed(now.toLocaleTimeString());
+    Promise.allSettled([
+      fetchHealth(),
+      fetchTenants(),
+      fetchConfig(),
+      fetchProfiles(),
+      fetchAvailableModels(),
+      fetchEvalRuns(),
+    ]).finally(() => {
+      const now = new Date();
+      setLastRefreshed(now.toLocaleTimeString());
+    });
   }, []);
 
   // Scroll chat window dynamically
@@ -206,27 +237,43 @@ const [activeTab, setActiveTab] = useState<string>('query');
     }
   }, [chatHistory, ragChatHistory, currentTenant]);
 
+  // ISSUE 7 FIX: 300ms debounce on tenant switch to prevent rapid Qdrant spam
   useEffect(() => {
-    if (currentTenant) {
+    if (!currentTenant) return;
+    if (tenantDebounceRef.current) clearTimeout(tenantDebounceRef.current);
+    tenantDebounceRef.current = setTimeout(() => {
       fetchWorkspaceDocs(currentTenant);
-    }
+    }, 300);
+    return () => {
+      if (tenantDebounceRef.current) clearTimeout(tenantDebounceRef.current);
+    };
   }, [currentTenant]);
 
 
 
   const fetchHealth = async () => {
     try {
-      const res = await fetch('/api/health');
-      const data = await safeJson(res);
-      setHealth(data);
+      // ISSUE 6 FIX: Use lightweight /api/system/health ping for circuit breaker check
+      const res = await fetchWithTimeout('/api/system/health', {}, 5000);
+      if (res.ok) {
+        setIsBackendReachable(true);
+        // Now fetch the full infrastructure health report in the background
+        fetchWithTimeout('/api/health', {}, 12000)
+          .then(r => safeJson(r))
+          .then(data => setHealth(data))
+          .catch(() => {});
+      } else {
+        setIsBackendReachable(false);
+      }
     } catch (e) {
-      console.error('Error fetching system health', e);
+      setIsBackendReachable(false);
+      console.warn('Backend unreachable — circuit breaker engaged', e);
     }
   };
 
   const fetchTenants = async () => {
     try {
-      const res = await fetch('/api/tenants');
+      const res = await fetchWithTimeout('/api/tenants', {}, 8000);
       const data = await safeJson(res);
       // Guard: API must return an array
       const list = Array.isArray(data) ? data : [];
@@ -241,7 +288,7 @@ const [activeTab, setActiveTab] = useState<string>('query');
 
   const fetchConfig = async () => {
     try {
-      const res = await fetch('/api/config');
+      const res = await fetchWithTimeout('/api/config', {}, 8000);
       const data = await safeJson(res);
       // Guard: only apply if we got a real config object back
       if (data && typeof data === 'object' && data.LLM_DEPLOYMENT_MODE) {
@@ -254,7 +301,7 @@ const [activeTab, setActiveTab] = useState<string>('query');
 
   const fetchAvailableModels = async () => {
     try {
-      const res = await fetch('/api/vllm/models');
+      const res = await fetchWithTimeout('/api/vllm/models', {}, 8000);
       const data = await safeJson(res);
       if (data && Array.isArray(data.models)) {
         setAvailableModels(data.models);
@@ -273,27 +320,25 @@ const [activeTab, setActiveTab] = useState<string>('query');
 
   const handleHardRefresh = async () => {
     setIsRefreshing(true);
-    try {
-      await Promise.all([
-        fetchHealth(),
-        fetchTenants(),
-        fetchConfig(),
-        fetchAvailableModels()
-      ]);
-      const now = new Date();
-      setLastRefreshed(now.toLocaleTimeString());
-    } catch (e) {
-      console.error('Error during hard refresh', e);
-    } finally {
-      setIsRefreshing(false);
-    }
+    // ISSUE 1 FIX: Use allSettled — one failing service won't block the rest from refreshing
+    await Promise.allSettled([
+      fetchHealth(),
+      fetchTenants(),
+      fetchConfig(),
+      fetchAvailableModels(),
+      fetchProfiles(),
+      fetchEvalRuns(),
+    ]);
+    const now = new Date();
+    setLastRefreshed(now.toLocaleTimeString());
+    setIsRefreshing(false);
   };
 
 
 
   const fetchProfiles = async () => {
     try {
-      const res = await fetch('/api/config/profiles');
+      const res = await fetchWithTimeout('/api/config/profiles', {}, 8000);
       const data = await safeJson(res);
       if (data && data.profiles) {
         setProfiles(data.profiles);
@@ -314,7 +359,7 @@ const [activeTab, setActiveTab] = useState<string>('query');
 
   const fetchEvalRuns = async () => {
     try {
-      const res = await fetch('/api/evaluations/runs');
+      const res = await fetchWithTimeout('/api/evaluations/runs', {}, 8000);
       const data = await safeJson(res);
       if (Array.isArray(data)) {
         setEvalRuns(data);
@@ -397,8 +442,10 @@ const [activeTab, setActiveTab] = useState<string>('query');
       alert('Friendly Connection Name (Alias) is required.');
       return;
     }
+    // ISSUE 5 FIX: Show loading spinner immediately so user sees feedback
+    setIsOnboarding(true);
     try {
-      const res = await fetch('/api/config/profiles/onboard', {
+      const res = await fetchWithTimeout('/api/config/profiles/onboard', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -408,7 +455,7 @@ const [activeTab, setActiveTab] = useState<string>('query');
           api_key: onboardApiKey,
           model_id: onboardModelId
         })
-      });
+      }, 10000);
       const data = await safeJson(res);
       if (res.ok) {
         alert(data.message || 'Profile onboarded successfully.');
@@ -422,6 +469,8 @@ const [activeTab, setActiveTab] = useState<string>('query');
       }
     } catch (e: any) {
       alert(`Onboard profile failed: ${e.message}`);
+    } finally {
+      setIsOnboarding(false);
     }
   };
 
@@ -1316,5 +1365,8 @@ const [activeTab, setActiveTab] = useState<string>('query');
     isTeiOnline,
     isRerankerOnline,
     isLlmOnline,
+    // ISSUE 5 & 6 additions
+    isBackendReachable,
+    isOnboarding,
   };
 };

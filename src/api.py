@@ -212,7 +212,7 @@ def build_system_health_report() -> dict:
     t_start = time.perf_counter_ns()
     try:
         import requests
-        res = requests.post(Config.TEI_ENDPOINT, json={"inputs": ["ping"]}, timeout=5.0)
+        res = requests.post(Config.TEI_ENDPOINT, json={"inputs": ["ping"]}, timeout=2.0)
         t_lat = round((time.perf_counter_ns() - t_start) / 1_000_000.0, 2)
         if res.status_code == 200:
             components["embeddings"] = {
@@ -246,7 +246,7 @@ def build_system_health_report() -> dict:
     if getattr(Config, "RERANK_ENABLED", True):
         try:
             import requests
-            res = requests.post(Config.RERANKER_ENDPOINT, json={"query": "ping", "texts": ["pong"]}, timeout=5.0)
+            res = requests.post(Config.RERANKER_ENDPOINT, json={"query": "ping", "texts": ["pong"]}, timeout=2.0)
             r_lat = round((time.perf_counter_ns() - r_start) / 1_000_000.0, 2)
             if res.status_code == 200:
                 components["reranker"] = {
@@ -311,7 +311,7 @@ def build_system_health_report() -> dict:
     c_start = time.perf_counter_ns()
     try:
         from src.processing.tasks import celery
-        inspector = celery.control.inspect()
+        inspector = celery.control.inspect(timeout=1.5)
         stats = inspector.stats() or {}
         w_count = len(stats.keys())
         c_lat = round((time.perf_counter_ns() - c_start) / 1_000_000.0, 2)
@@ -372,9 +372,15 @@ def build_system_health_report() -> dict:
     }
 
 # --- SYSTEM HEALTH ENDPOINTS ---
+
+@app.get("/api/system/health")
+def get_lightweight_health():
+    """Lightweight FastAPI liveness ping — used by Docker HEALTHCHECK and frontend circuit breaker."""
+    return {"status": "OK", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
 @app.get("/api/health")
-async def get_health_status():
-    """Checks the live connectivity status across all core components."""
+def get_health_status():
+    """Runs full infrastructure connectivity checks across all core components (runs in threadpool)."""
     report = build_system_health_report()
     is_healthy = report["overall_status"] == "HEALTHY"
     return {
@@ -396,7 +402,7 @@ async def get_health_status():
 
 # --- CONTROL PLANE CONFIG ENDPOINTS ---
 @app.get("/api/config")
-async def get_configuration():
+def get_configuration():
     """Retrieves the decrypted operational model profile configurations."""
     cfg = get_active_llm_config()
     # Mask API key for UI safety
@@ -432,7 +438,7 @@ async def get_configuration():
     }
 
 @app.post("/api/config")
-async def save_configuration(cfg_data: Dict[str, Any]):
+def save_configuration(cfg_data: Dict[str, Any]):
     """Saves updated model configurations encrypted to disk."""
     required_keys = ["LLM_DEPLOYMENT_MODE", "LLM_API_BASE_URL", "LLM_API_KEY", "DEFAULT_MODEL_ID"]
     for key in required_keys:
@@ -460,7 +466,7 @@ async def save_configuration(cfg_data: Dict[str, Any]):
 
 # --- NEW MULTI-PROFILE CONFIG ENDPOINTS ---
 @app.get("/api/config/profiles")
-async def get_profiles():
+def get_profiles():
     """Retrieves all connection profiles and identifies the active one."""
     profiles = SecureStorageManager.load_encrypted_profiles()
     active = profiles.get("_active_profile", "Default Environment")
@@ -482,7 +488,7 @@ async def get_profiles():
     }
 
 @app.post("/api/config/profiles/activate")
-async def activate_profile(payload: Dict[str, str]):
+def activate_profile(payload: Dict[str, str]):
     """Activates a saved operational profile and applies its settings overrides."""
     alias = payload.get("alias")
     if not alias:
@@ -603,7 +609,7 @@ async def export_raw_system_logs():
     return FileResponse(log_file, filename="nexus_system_diagnostics.log", media_type="text/plain")
 
 @app.post("/api/config/profiles/onboard")
-async def onboard_profile(cfg_data: Dict[str, Any]):
+def onboard_profile(cfg_data: Dict[str, Any]):
     """Onboards and persists a new operational connection profile."""
     alias = cfg_data.get("alias", "").strip()
     if not alias:
@@ -627,7 +633,7 @@ async def onboard_profile(cfg_data: Dict[str, Any]):
     return {"status": "success", "message": f"Connection profile '{alias}' onboarded successfully."}
 
 @app.post("/api/config/runtime-settings")
-async def save_runtime_settings(settings_data: Dict[str, Any]):
+def save_runtime_settings(settings_data: Dict[str, Any]):
     """Saves downstream/retrieval parameters globally (shared across all profiles)."""
     profiles = SecureStorageManager.load_encrypted_profiles()
     
@@ -660,7 +666,7 @@ async def save_runtime_settings(settings_data: Dict[str, Any]):
     return {"status": "success", "message": "Global downstream settings updated & applied.", "config": active_cfg}
 
 @app.delete("/api/config/profiles/{alias}")
-async def delete_profile(alias: str):
+def delete_profile(alias: str):
     """Purges a connection profile by friendly name."""
     profiles = SecureStorageManager.load_encrypted_profiles()
     if alias not in profiles:
@@ -800,15 +806,16 @@ async def reset_vector_collection():
 
 # --- TENANT ADMINISTRATION ENDPOINTS ---
 @app.get("/api/vllm/models")
-async def list_vllm_models():
-    """Fetches the list of live models/adapters available on the configured LLM API endpoint."""
+def list_vllm_models():
+    """Fetches the list of live models/adapters available on the configured LLM API endpoint (runs in threadpool)."""
     llm_cfg = get_active_llm_config()
     deployment_mode = llm_cfg.get("LLM_DEPLOYMENT_MODE", Config.LLM_DEPLOYMENT_MODE)
     api_base_url = llm_cfg.get("LLM_API_BASE_URL", Config.LLM_API_BASE_URL)
     api_key = llm_cfg.get("LLM_API_KEY", Config.LLM_API_KEY)
     default_model = llm_cfg.get("DEFAULT_MODEL_ID", Config.DEFAULT_MODEL_ID)
 
-    # 1. Fetch base models from live vLLM models endpoint if LOCAL/ON_PREM
+    # 1. Fetch base models from live vLLM /models endpoint — only when in LOCAL/ON_PREM mode
+    # Skip entirely for CLOUD providers (Gemini, Azure OpenAI, OpenAI) to avoid a 2s TCP timeout
     vllm_models = []
     if deployment_mode == "LOCAL":
         url = f"{api_base_url.rstrip('/')}/models"
@@ -822,19 +829,22 @@ async def list_vllm_models():
         except Exception:
             pass
 
-    # 2. Query local Ollama tag registry if running on loopback
+    # 2. Query local Ollama tag registry — only when Ollama is detected in the endpoint URL
+    # Never probe localhost:11434 blindly on CLOUD mode; this caused a 2s timeout on every refresh
     ollama_models = []
-    try:
-        ollama_url = f"{Config.LLM_API_BASE_URL.rstrip('/')}/tags" if "11434" in Config.LLM_API_BASE_URL else "http://localhost:11434/api/tags"
-        req_ollama = urllib.request.Request(ollama_url, method="GET")
-        with urllib.request.urlopen(req_ollama, timeout=2) as res_ollama:
-            ollama_data = json.loads(res_ollama.read().decode("utf-8"))
-            for m in ollama_data.get("models", []):
-                m_name = m.get("name")
-                if m_name:
-                    ollama_models.append(m_name)
-    except Exception:
-        pass
+    is_ollama = deployment_mode == "LOCAL" and ("11434" in api_base_url or "ollama" in api_base_url.lower())
+    if is_ollama:
+        try:
+            ollama_url = f"{api_base_url.rstrip('/')}/tags" if "11434" in api_base_url else "http://localhost:11434/api/tags"
+            req_ollama = urllib.request.Request(ollama_url, method="GET")
+            with urllib.request.urlopen(req_ollama, timeout=2) as res_ollama:
+                ollama_data = json.loads(res_ollama.read().decode("utf-8"))
+                for m in ollama_data.get("models", []):
+                    m_name = m.get("name")
+                    if m_name:
+                        ollama_models.append(m_name)
+        except Exception:
+            pass
 
     # 3. Retrieve manually onboarded models
     onboarded_models = llm_cfg.get("ONBOARDED_OLLAMA_MODELS", [])
@@ -851,13 +861,13 @@ async def list_vllm_models():
     return {"models": sorted(merged_models)}
 
 @app.get("/api/tenants")
-async def list_tenants():
+def list_tenants():
     """Lists all provisioned active workspaces registered in the platform."""
     registry = SecureStorageManager.load_tenant_registry()
     return [{"tenant_id": k, "adapter_weight_matrix": v} for k, v in registry.items()]
 
 @app.post("/api/tenants")
-async def register_tenant(tenant_info: Dict[str, str]):
+def register_tenant(tenant_info: Dict[str, str]):
     """Registers and provisions a new tenant workspace adapter alignment focus."""
     tenant_id = tenant_info.get("tenant_id", "").strip().lower()
     adapter = tenant_info.get("adapter_weight_matrix", "").strip()
