@@ -253,21 +253,31 @@ const [activeTab, setActiveTab] = useState<string>('query');
 
   const fetchHealth = async () => {
     try {
-      // ISSUE 6 FIX: Use lightweight /api/system/health ping for circuit breaker check
+      // ISSUE 6 FIX: Use lightweight /api/system/health ping for circuit breaker check.
+      // Only mark backend as unreachable on TRUE network failure (AbortError/TypeError).
+      // A 404 means the server is up but running an older image — stay reachable.
       const res = await fetchWithTimeout('/api/system/health', {}, 5000);
+      setIsBackendReachable(true); // Server responded — it's reachable regardless of status
       if (res.ok) {
-        setIsBackendReachable(true);
-        // Now fetch the full infrastructure health report in the background
+        // New image: lightweight ping succeeded, now fetch full health in background
         fetchWithTimeout('/api/health', {}, 12000)
           .then(r => safeJson(r))
           .then(data => setHealth(data))
           .catch(() => {});
       } else {
-        setIsBackendReachable(false);
+        // Old image (no /api/system/health yet): fall back to full /api/health directly
+        fetchWithTimeout('/api/health', {}, 12000)
+          .then(r => safeJson(r))
+          .then(data => setHealth(data))
+          .catch(() => {});
       }
-    } catch (e) {
-      setIsBackendReachable(false);
-      console.warn('Backend unreachable — circuit breaker engaged', e);
+    } catch (e: any) {
+      // Only a real network error (AbortError, connection refused) kills reachability
+      if (e?.name === 'AbortError' || e?.message?.includes('Failed to fetch') || e?.message?.includes('NetworkError')) {
+        setIsBackendReachable(false);
+        console.warn('Backend unreachable — circuit breaker engaged', e);
+      }
+      // Any other error (CORS, etc): leave reachable=true to avoid false alarms
     }
   };
 

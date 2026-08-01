@@ -774,7 +774,10 @@ class ContextOrchestrator:
         provider_type = overrides.get("PROVIDER_TYPE", "Cloud API" if deployment_mode == "CLOUD" else "vLLM")
 
         vllm_endpoint, request_headers = self._build_llm_endpoint_and_headers(api_base_url, api_key, provider_type)
-        target_model = default_model or target_adapter or "gemini-3.5-flash"
+        # CRITICAL FIX: Never use the tenant adapter name as model ID.
+        # Adapter strings like "general_knowledge" are NOT valid model IDs — they cause
+        # HTTP 404 from cloud APIs (Gemini, Azure OpenAI). Always use the configured model.
+        target_model = default_model or Config.DEFAULT_MODEL_ID or "gemini-2.0-flash"
 
         max_out = int(overrides.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS) or 2048)
         vllm_payload = {
