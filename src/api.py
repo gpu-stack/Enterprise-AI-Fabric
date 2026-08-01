@@ -874,7 +874,7 @@ async def register_tenant(tenant_info: Dict[str, str]):
     return {"status": "success", "message": f"Tenant workspace '{tenant_id}' provisioned."}
 
 @app.delete("/api/tenants/{tenant_id}")
-async def deprovision_tenant(tenant_id: str):
+def deprovision_tenant(tenant_id: str):
     """Deletes a tenant workspace and purges all of its vector index records from Qdrant."""
     registry = SecureStorageManager.load_tenant_registry()
     if tenant_id not in registry:
@@ -900,14 +900,14 @@ async def deprovision_tenant(tenant_id: str):
     return {"status": "success", "message": f"Tenant workspace '{tenant_id}' deprovisioned and vector footprint cleared."}
 
 @app.get("/api/tenants/{tenant_id}/documents")
-async def list_tenant_documents(tenant_id: str):
+def list_tenant_documents(tenant_id: str):
     """Retrieves detailed document lineages/families stored for a given tenant."""
     pipeline = TenantIngestionPipeline(tenant_id=tenant_id)
     docs = pipeline.get_tenant_document_details()
     return {"tenant_id": tenant_id, "documents": docs}
 
 @app.delete("/api/tenants/{tenant_id}/documents/{document_family}")
-async def delete_tenant_document_family(tenant_id: str, document_family: str):
+def delete_tenant_document_family(tenant_id: str, document_family: str):
     """Deprovisions all vector chunks belonging to a specific document family under a tenant."""
     pipeline = TenantIngestionPipeline(tenant_id=tenant_id)
     deleted_count = pipeline.delete_document_family(document_family)
