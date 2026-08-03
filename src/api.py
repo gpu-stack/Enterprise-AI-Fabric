@@ -356,6 +356,10 @@ def build_system_health_report() -> dict:
         p_type = (get_active_llm_config().get("PROVIDER_TYPE") or "").lower()
         is_cloud_profile = mode == "CLOUD" or p_type in ["cloud api", "openai", "gemini", "azure openai", "azure", "anthropic", "mistral", "openai-compatible"] or "azure" in p_type or "openai" in p_type or "generativelanguage" in llm_url.lower()
 
+        models_url = f"{llm_url.rstrip('/')}/models"
+        if not llm_url.endswith("/v1") and "/v1/" not in llm_url and "generativelanguage.googleapis.com" not in llm_url and "openai.azure.com" not in llm_url:
+            models_url = f"{llm_url.rstrip('/')}/v1/models"
+
         res = requests.get(models_url, headers=headers, timeout=2.5)
         l_lat = round((time.perf_counter_ns() - l_start) / 1_000_000.0, 2)
         valid_codes = [200, 400, 401, 403, 404, 405] if is_cloud_profile else [200, 401, 403]
