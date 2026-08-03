@@ -42,8 +42,12 @@ class ContextOrchestrator:
         base_url = (api_base_url or "").strip().rstrip('/')
         p_type = (provider_type or "").lower()
         
-        if "generativelanguage.googleapis.com" in base_url:
-            base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+        if "generativelanguage.googleapis.com" in base_url or p_type == "gemini":
+            if not base_url or "generativelanguage.googleapis.com" in base_url or p_type == "gemini":
+                base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+
+        if ("api.openai.com" in base_url or p_type == "openai") and not base_url:
+            base_url = "https://api.openai.com/v1"
 
         if "/chat/completions" in base_url:
             vllm_endpoint = base_url
@@ -53,7 +57,7 @@ class ContextOrchestrator:
             else:
                 vllm_endpoint = f"{base_url}/chat/completions"
         else:
-            if ("ollama" in p_type or "openai" in p_type or "vllm" in p_type) and not base_url.endswith("/v1") and "/v1/" not in base_url and "generativelanguage.googleapis.com" not in base_url:
+            if ("ollama" in p_type or p_type == "openai" or "vllm" in p_type) and not base_url.endswith("/v1") and "/v1/" not in base_url and "generativelanguage.googleapis.com" not in base_url:
                 base_url = f"{base_url}/v1"
             vllm_endpoint = f"{base_url}/chat/completions"
 
@@ -63,6 +67,38 @@ class ContextOrchestrator:
             headers["api-key"] = api_key  # Required for Azure OpenAI REST API authentication
 
         return vllm_endpoint, headers
+
+    def _resolve_target_model(self, default_model: str, target_adapter: str, provider_type: str, deployment_mode: str, api_base_url: str, api_key: str) -> str:
+        """Safely resolves target model ID, ensuring Cloud APIs (OpenAI, Gemini, Azure) always use their configured model ID instead of tenant adapter names."""
+        p_type = (provider_type or "").lower()
+        url = (api_base_url or "").lower()
+        is_cloud = (
+            (deployment_mode or "").upper() == "CLOUD" or
+            p_type in ["cloud api", "openai", "gemini", "azure openai", "azure", "anthropic", "openai-compatible"] or
+            "azure" in p_type or
+            "openai.azure.com" in url or
+            "generativelanguage.googleapis.com" in url or
+            "api.openai.com" in url
+        )
+        if is_cloud or not api_base_url:
+            return default_model or Config.DEFAULT_MODEL_ID or "gemini-2.0-flash"
+        
+        live_models = []
+        try:
+            m_url = f"{api_base_url.rstrip('/')}/models"
+            req = urllib.request.Request(m_url, method="GET")
+            if api_key and api_key.lower() != "none":
+                req.add_header("Authorization", f"Bearer {api_key}")
+                req.add_header("api-key", api_key)
+            with urllib.request.urlopen(req, timeout=1.5) as res:
+                data = json.loads(res.read().decode("utf-8"))
+                live_models = [m["id"] for m in data.get("data", [])]
+        except Exception:
+            pass
+        
+        if target_adapter in live_models:
+            return target_adapter
+        return default_model or Config.DEFAULT_MODEL_ID or "gemini-2.0-flash"
 
     def get_standalone_query(self, user_query: str, chat_history: List[Dict[str, str]], llm_overrides: Dict[str, Any] = None) -> str:
         """Converts a user query and conversation history into a clean standalone search query.
@@ -260,27 +296,7 @@ class ContextOrchestrator:
             provider_type = overrides.get("PROVIDER_TYPE", "Cloud API" if deployment_mode == "CLOUD" else "vLLM")
 
             vllm_endpoint, request_headers = self._build_llm_endpoint_and_headers(api_base_url, api_key, provider_type)
-
-            if provider_type in ["Ollama", "OpenAI-Compatible", "Cloud API"] or "azure" in provider_type.lower() or "openai.azure.com" in api_base_url:
-                target_model = default_model
-            else:
-                live_models = []
-                try:
-                    url = f"{api_base_url.rstrip('/')}/models"
-                    req = urllib.request.Request(url, method="GET")
-                    if api_key and api_key.lower() != "none":
-                        req.add_header("Authorization", f"Bearer {api_key}")
-                        req.add_header("api-key", api_key)
-                    with urllib.request.urlopen(req, timeout=1.5) as res:
-                        data = json.loads(res.read().decode("utf-8"))
-                        live_models = [m["id"] for m in data.get("data", [])]
-                except Exception:
-                    pass
-                
-                if target_adapter in live_models:
-                    target_model = target_adapter
-                else:
-                    target_model = default_model
+            target_model = self._resolve_target_model(default_model, target_adapter, provider_type, deployment_mode, api_base_url, api_key)
 
             max_out = int(overrides.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS) or 2048)
             vllm_payload = {
@@ -517,27 +533,7 @@ class ContextOrchestrator:
             provider_type = overrides.get("PROVIDER_TYPE", "Cloud API" if deployment_mode == "CLOUD" else "vLLM")
 
             vllm_endpoint, request_headers = self._build_llm_endpoint_and_headers(api_base_url, api_key, provider_type)
-
-            if provider_type in ["Ollama", "OpenAI-Compatible", "Cloud API"] or "azure" in provider_type.lower() or "openai.azure.com" in api_base_url:
-                target_model = default_model
-            else:
-                live_models = []
-                try:
-                    url = f"{api_base_url.rstrip('/')}/models"
-                    req = urllib.request.Request(url, method="GET")
-                    if api_key and api_key.lower() != "none":
-                        req.add_header("Authorization", f"Bearer {api_key}")
-                        req.add_header("api-key", api_key)
-                    with urllib.request.urlopen(req, timeout=1.5) as res:
-                        data = json.loads(res.read().decode("utf-8"))
-                        live_models = [m["id"] for m in data.get("data", [])]
-                except Exception:
-                    pass
-                
-                if target_adapter in live_models:
-                    target_model = target_adapter
-                else:
-                    target_model = default_model
+            target_model = self._resolve_target_model(default_model, target_adapter, provider_type, deployment_mode, api_base_url, api_key)
 
             max_out = int(overrides.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS) or 2048)
             vllm_payload = {
@@ -775,10 +771,7 @@ class ContextOrchestrator:
         provider_type = overrides.get("PROVIDER_TYPE", "Cloud API" if deployment_mode == "CLOUD" else "vLLM")
 
         vllm_endpoint, request_headers = self._build_llm_endpoint_and_headers(api_base_url, api_key, provider_type)
-        # CRITICAL FIX: Never use the tenant adapter name as model ID.
-        # Adapter strings like "general_knowledge" are NOT valid model IDs — they cause
-        # HTTP 404 from cloud APIs (Gemini, Azure OpenAI). Always use the configured model.
-        target_model = default_model or Config.DEFAULT_MODEL_ID or "gemini-2.0-flash"
+        target_model = self._resolve_target_model(default_model, target_adapter, provider_type, deployment_mode, api_base_url, api_key)
 
         max_out = int(overrides.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS) or 2048)
         vllm_payload = {
@@ -826,7 +819,7 @@ class ContextOrchestrator:
         provider_type = overrides.get("PROVIDER_TYPE", "Cloud API" if deployment_mode == "CLOUD" else "vLLM")
 
         vllm_endpoint, request_headers = self._build_llm_endpoint_and_headers(api_base_url, api_key, provider_type)
-        target_model = default_model or Config.DEFAULT_MODEL_ID or "gemini-2.0-flash"
+        target_model = self._resolve_target_model(default_model, target_adapter, provider_type, deployment_mode, api_base_url, api_key)
 
         max_out = int(overrides.get("DEFAULT_MAX_TOKENS", Config.DEFAULT_MAX_TOKENS) or 2048)
         vllm_payload = {

@@ -643,7 +643,8 @@ def onboard_profile(cfg_data: Dict[str, Any]):
     
     # Map input provider to deployment mode
     provider = cfg_data.get("provider_type", "Cloud API")
-    mode = "CLOUD" if provider == "Cloud API" else "LOCAL"
+    cloud_providers = ["Cloud API", "OpenAI", "Gemini", "Azure OpenAI", "Azure", "Anthropic", "Mistral", "OpenAI-Compatible"]
+    mode = "CLOUD" if provider in cloud_providers else "LOCAL"
     
     profiles[alias] = {
         "LLM_DEPLOYMENT_MODE": mode,
