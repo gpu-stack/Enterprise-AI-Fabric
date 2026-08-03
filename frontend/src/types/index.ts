@@ -66,6 +66,10 @@ export interface QueryResponse {
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  latency?: number;
+  ttft?: number;
+  generation_ms?: number;
+  tokens?: Record<string, number>;
 }
 
 export interface EvalTestCase {

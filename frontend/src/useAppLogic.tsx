@@ -806,7 +806,7 @@ const [activeTab, setActiveTab] = useState<string>('query');
     }
   };
 
-  // SandyGPT Direct Conversational Chat Handler
+  // SandyGPT Direct Conversational Chat Handler with Token-by-Token SSE Streaming
   const handleSendChat = async () => {
     if (!chatInput.trim()) return;
     const userMsg: ChatMessage = { role: 'user', content: chatInput.trim() };
@@ -820,6 +820,16 @@ const [activeTab, setActiveTab] = useState<string>('query');
     setChatInput('');
     setIsChatting(true);
 
+    const assistantMsgPlaceholder: ChatMessage = {
+      role: 'assistant',
+      content: ''
+    };
+
+    setChatHistory(prev => ({
+      ...prev,
+      [currentTenant]: [...updatedHistory, assistantMsgPlaceholder]
+    }));
+
     try {
       const res = await fetch(`/api/tenants/${currentTenant}/chat`, {
         method: 'POST',
@@ -829,22 +839,63 @@ const [activeTab, setActiveTab] = useState<string>('query');
           temperature: chatTemp
         })
       });
-      const data = await safeJson(res);
-      if (res.ok && data.status === 'success') {
-        const assistantMsg: ChatMessage = { role: 'assistant', content: data.answer };
-        setChatHistory(prev => ({
-          ...prev,
-          [currentTenant]: [...updatedHistory, assistantMsg]
-        }));
-      } else {
-        const errorMsg: ChatMessage = { role: 'assistant', content: `❌ Error: ${data.message || 'Failed to fetch model response.'}` };
-        setChatHistory(prev => ({
-          ...prev,
-          [currentTenant]: [...updatedHistory, errorMsg]
-        }));
+
+      if (!res.ok) {
+        throw new Error(`Chat engine failed with HTTP ${res.status}`);
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        throw new Error("No readable stream reader available on response.");
+      }
+
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const cleanLine = line.trim();
+          if (cleanLine.startsWith("data:")) {
+            const dataContent = cleanLine.substring(5).trim();
+            if (!dataContent) continue;
+            try {
+              const chunk = JSON.parse(dataContent);
+              if (chunk.type === "token") {
+                assistantMsgPlaceholder.content += chunk.content;
+                setChatHistory(prev => ({
+                  ...prev,
+                  [currentTenant]: [...updatedHistory, { ...assistantMsgPlaceholder }]
+                }));
+              } else if (chunk.type === "final") {
+                assistantMsgPlaceholder.content = chunk.answer || assistantMsgPlaceholder.content;
+                assistantMsgPlaceholder.latency = chunk.latency_seconds;
+                assistantMsgPlaceholder.ttft = chunk.ttft_ms;
+                assistantMsgPlaceholder.generation_ms = chunk.generation_ms;
+                assistantMsgPlaceholder.tokens = chunk.token_metrics;
+
+                setChatHistory(prev => ({
+                  ...prev,
+                  [currentTenant]: [...updatedHistory, { ...assistantMsgPlaceholder }]
+                }));
+              } else if (chunk.type === "error") {
+                throw new Error(chunk.message || "Chat engine returned execution fault.");
+              }
+            } catch (jsonErr) {
+              // Ignore partial JSON chunks
+            }
+          }
+        }
       }
     } catch (e: any) {
-      const errBubble: ChatMessage = { role: 'assistant', content: `❌ Network connection error: ${e.message}` };
+      const errBubble: ChatMessage = { role: 'assistant', content: `❌ Error: ${e.message || 'Failed to fetch model response.'}` };
       setChatHistory(prev => ({
         ...prev,
         [currentTenant]: [...updatedHistory, errBubble]

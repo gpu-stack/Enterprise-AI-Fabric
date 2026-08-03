@@ -396,7 +396,10 @@ def get_health_status():
             },
             "tei_embedder": {"status": "ONLINE" if report["components"].get("embeddings", {}).get("status") == "HEALTHY" else "OFFLINE"},
             "reranker": {"status": "ONLINE" if report["components"].get("reranker", {}).get("status") == "HEALTHY" else "OFFLINE"},
-            "llm_api": {"status": "ONLINE" if report["components"].get("llm", {}).get("status") == "HEALTHY" else "OFFLINE"}
+            "llm_api": {
+                "status": "ONLINE" if report["components"].get("llm", {}).get("status") == "HEALTHY" else "OFFLINE",
+                "model": get_active_llm_config().get("DEFAULT_MODEL_ID") or Config.DEFAULT_MODEL_ID or "N/A"
+            }
         }
     }
 
@@ -1065,7 +1068,8 @@ async def query_tenant_rag(tenant_id: str, payload: Dict[str, Any]):
 
 @app.post("/api/tenants/{tenant_id}/chat")
 async def chat_tenant(tenant_id: str, payload: Dict[str, Any]):
-    """Executes a conversational chat prompt against the active tenant domain (non-RAG direct chat)."""
+    """Executes a conversational chat prompt against the active tenant domain (non-RAG direct chat), streaming tokens via SSE."""
+    request_start = time.perf_counter_ns()
     registry = SecureStorageManager.load_tenant_registry()
     adapter_matrix = registry.get(tenant_id, tenant_id)
         
@@ -1074,14 +1078,18 @@ async def chat_tenant(tenant_id: str, payload: Dict[str, Any]):
     
     llm_cfg = get_active_llm_config()
     
-    res = orchestrator.generate_chat_response(
-        target_adapter=adapter_matrix,
-        chat_history=chat_history,
-        temperature=temperature,
-        llm_overrides=llm_cfg
-    )
-    
-    return res
+    def event_stream_generator():
+        for chunk in orchestrator.generate_chat_response_stream(
+            target_adapter=adapter_matrix,
+            chat_history=chat_history,
+            temperature=temperature,
+            llm_overrides=llm_cfg,
+            request_start_time=request_start
+        ):
+            yield f"data: {json.dumps(chunk)}\n\n"
+
+    return StreamingResponse(event_stream_generator(), media_type="text/event-stream")
+
 
 # --- MULTI-TURN CONVERSATION MEMORY ENDPOINTS ---
 @app.get("/api/tenants/{tenant_id}/sessions/{session_id}/history")

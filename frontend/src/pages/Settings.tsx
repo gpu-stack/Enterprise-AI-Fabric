@@ -1033,6 +1033,9 @@ export const Settings = () => {
               <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
                 Status: <strong style={{ color: isLlmOnline ? '#10b981' : '#ef4444' }}>{isLlmOnline ? 'ONLINE' : 'OFFLINE'}</strong>
                 <span style={{ marginLeft: '0.75rem' }}>Mode: <code>{config?.LLM_DEPLOYMENT_MODE || 'UNKNOWN'}</code></span>
+                {(config?.DEFAULT_MODEL_ID || health?.nodes?.llm_api?.model) && (
+                  <span style={{ marginLeft: '0.75rem' }}>Model: <code>{config?.DEFAULT_MODEL_ID || health?.nodes?.llm_api?.model}</code></span>
+                )}
               </div>
             </div>
           </div>

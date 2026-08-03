@@ -206,14 +206,23 @@ export const Chat = () => {
                     <div className={`avatar-badge ${msg.role === 'user' ? 'avatar-badge-user' : 'avatar-badge-assistant'}`} style={msg.role === 'assistant' ? { background: 'linear-gradient(135deg, #f39c12 0%, #f1c40f 100%)' } : undefined}>
                       {msg.role === 'user' ? <User size={16} /> : <Cpu size={16} />}
                     </div>
-                    <div 
-                      className="message-content" 
-                      dangerouslySetInnerHTML={{ 
-                        __html: msg.role === 'assistant'
-                          ? parseMarkdownToHtml(msg.content)
-                          : msg.content
-                      }}
-                    />
+                    <div className="message-wrapper" style={{ flex: 1 }}>
+                      <div 
+                        className="message-content" 
+                        dangerouslySetInnerHTML={{ 
+                          __html: msg.role === 'assistant'
+                            ? parseMarkdownToHtml(msg.content)
+                            : msg.content
+                        }}
+                      />
+                      {msg.role === 'assistant' && (msg.ttft !== undefined || msg.latency !== undefined) && (
+                        <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: '#888', display: 'flex', gap: '0.8rem', alignItems: 'center' }}>
+                          {msg.ttft !== undefined && Number(msg.ttft) > 0 && <span>⚡ TTFT: <strong>{msg.ttft}ms</strong></span>}
+                          {msg.latency !== undefined && Number(msg.latency) > 0 && <span>⏱️ Latency: <strong>{msg.latency}s</strong></span>}
+                          {msg.tokens?.total_tokens !== undefined && <span>🪙 Tokens: <strong>{msg.tokens.total_tokens}</strong></span>}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
