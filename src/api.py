@@ -352,13 +352,14 @@ def build_system_health_report() -> dict:
             headers["Authorization"] = f"Bearer {api_key}"
             headers["api-key"] = api_key
 
-        models_url = f"{llm_url.rstrip('/')}/models"
-        if not llm_url.endswith("/v1") and "/v1/" not in llm_url and "generativelanguage.googleapis.com" not in llm_url and "openai.azure.com" not in llm_url:
-            models_url = f"{llm_url.rstrip('/')}/v1/models"
+        mode = Config.LLM_DEPLOYMENT_MODE
+        p_type = (get_active_llm_config().get("PROVIDER_TYPE") or "").lower()
+        is_cloud_profile = mode == "CLOUD" or p_type in ["cloud api", "openai", "gemini", "azure openai", "azure", "anthropic", "mistral", "openai-compatible"] or "azure" in p_type or "openai" in p_type or "generativelanguage" in llm_url.lower()
 
         res = requests.get(models_url, headers=headers, timeout=2.5)
         l_lat = round((time.perf_counter_ns() - l_start) / 1_000_000.0, 2)
-        if res.status_code in [200, 401, 403]:
+        valid_codes = [200, 400, 401, 403, 404, 405] if is_cloud_profile else [200, 401, 403]
+        if res.status_code in valid_codes:
             components["llm"] = {
                 "name": "LLM Engine",
                 "status": "HEALTHY",
@@ -647,6 +648,9 @@ def onboard_profile(cfg_data: Dict[str, Any]):
     mode = "CLOUD" if provider in cloud_providers else "LOCAL"
     
     endpoint_url = cfg_data.get("endpoint_url", "").strip()
+    if "/openai/deployment/" in endpoint_url and "/openai/deployments/" not in endpoint_url:
+        endpoint_url = endpoint_url.replace("/openai/deployment/", "/openai/deployments/")
+
     if provider in ["Gemini", "Google Gemini"] and (not endpoint_url or "localhost" in endpoint_url or "127.0.0.1" in endpoint_url):
         endpoint_url = "https://generativelanguage.googleapis.com/v1beta/openai"
     elif provider in ["OpenAI"] and (not endpoint_url or "localhost" in endpoint_url or "127.0.0.1" in endpoint_url):

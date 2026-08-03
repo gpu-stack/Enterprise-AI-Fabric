@@ -52,6 +52,8 @@ class ContextOrchestrator:
         if "/chat/completions" in base_url:
             vllm_endpoint = base_url
         elif "openai.azure.com" in base_url or "azure" in p_type:
+            if "/openai/deployment/" in base_url and "/openai/deployments/" not in base_url:
+                base_url = base_url.replace("/openai/deployment/", "/openai/deployments/")
             if "api-version" not in base_url:
                 vllm_endpoint = f"{base_url}/chat/completions?api-version=2024-02-15-preview"
             else:
