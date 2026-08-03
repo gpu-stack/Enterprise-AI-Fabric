@@ -646,9 +646,15 @@ def onboard_profile(cfg_data: Dict[str, Any]):
     cloud_providers = ["Cloud API", "OpenAI", "Gemini", "Azure OpenAI", "Azure", "Anthropic", "Mistral", "OpenAI-Compatible"]
     mode = "CLOUD" if provider in cloud_providers else "LOCAL"
     
+    endpoint_url = cfg_data.get("endpoint_url", "").strip()
+    if provider in ["Gemini", "Google Gemini"] and (not endpoint_url or "localhost" in endpoint_url or "127.0.0.1" in endpoint_url):
+        endpoint_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+    elif provider in ["OpenAI"] and (not endpoint_url or "localhost" in endpoint_url or "127.0.0.1" in endpoint_url):
+        endpoint_url = "https://api.openai.com/v1"
+
     profiles[alias] = {
         "LLM_DEPLOYMENT_MODE": mode,
-        "LLM_API_BASE_URL": cfg_data.get("endpoint_url", ""),
+        "LLM_API_BASE_URL": endpoint_url,
         "LLM_API_KEY": cfg_data.get("api_key", ""),
         "DEFAULT_MODEL_ID": cfg_data.get("model_id", ""),
         "PROVIDER_TYPE": provider

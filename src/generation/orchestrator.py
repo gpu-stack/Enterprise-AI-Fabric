@@ -869,13 +869,25 @@ class ContextOrchestrator:
                 "completion_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens
             }
-        except Exception:
+        except Exception as stream_err:
             try:
                 import requests
                 vllm_payload["stream"] = False
                 llm_start = time.perf_counter_ns()
                 res_sync = requests.post(vllm_endpoint, json=vllm_payload, headers=request_headers, timeout=30.0)
-                res_sync.raise_for_status()
+                if not res_sync.ok:
+                    try:
+                        err_json = res_sync.json()
+                        if isinstance(err_json, list) and len(err_json) > 0:
+                            err_detail = err_json[0].get("error", {}).get("message", res_sync.text)
+                        elif isinstance(err_json, dict):
+                            err_detail = err_json.get("error", {}).get("message", res_sync.text)
+                        else:
+                            err_detail = res_sync.text
+                    except Exception:
+                        err_detail = res_sync.text
+                    yield {"type": "error", "message": f"LLM Engine Rejection [{res_sync.status_code}]: {err_detail}"}
+                    return
                 res_data = res_sync.json()
                 response_text = res_data["choices"][0]["message"]["content"]
                 generation_ms = round((time.perf_counter_ns() - llm_start) / 1_000_000.0, 2)
@@ -883,14 +895,7 @@ class ContextOrchestrator:
                 token_metrics = res_data.get("usage", {})
                 yield {"type": "token", "content": response_text}
             except Exception as sync_err:
-                err_str = str(sync_err)
-                if "404" in err_str:
-                    err_msg = f"LLM Endpoint or Model ID not found [HTTP 404]. Verify endpoint URL ('{vllm_endpoint}') and model ID ('{target_model}') in System Settings."
-                elif "401" in err_str or "403" in err_str:
-                    err_msg = f"LLM Authentication failed [{err_str}]. Check your API Key in System Settings."
-                else:
-                    err_msg = f"Inference engine rejection: {err_str}"
-                yield {"type": "error", "message": err_msg}
+                yield {"type": "error", "message": f"Inference engine fault: {str(sync_err)}"}
                 return
 
         total_e2e_sec = round((time.perf_counter_ns() - pre_start) / 1_000_000_000.0, 3)

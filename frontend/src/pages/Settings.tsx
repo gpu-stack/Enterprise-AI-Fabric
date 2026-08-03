@@ -898,11 +898,38 @@ export const Settings = () => {
                             <select 
                               className="tenant-select" 
                               value={onboardProviderType}
-                              onChange={(e) => setOnboardProviderType(e.target.value)}
+                              onChange={(e) => {
+                                const pType = e.target.value;
+                                setOnboardProviderType(pType);
+                                if (pType === 'Gemini') {
+                                  setOnboardEndpointUrl('https://generativelanguage.googleapis.com/v1beta/openai');
+                                  if (!onboardModelId || onboardModelId === 'gpt-4o' || onboardModelId === 'llama3.2:latest') {
+                                    setOnboardModelId('gemini-2.0-flash');
+                                  }
+                                } else if (pType === 'OpenAI') {
+                                  setOnboardEndpointUrl('https://api.openai.com/v1');
+                                  if (!onboardModelId || onboardModelId.startsWith('gemini')) {
+                                    setOnboardModelId('gpt-4o');
+                                  }
+                                } else if (pType === 'Azure OpenAI') {
+                                  setOnboardEndpointUrl('https://my-resource.openai.azure.com');
+                                  if (!onboardModelId || onboardModelId.startsWith('gemini')) {
+                                    setOnboardModelId('gpt-4o');
+                                  }
+                                } else if (pType === 'vLLM') {
+                                  setOnboardEndpointUrl('http://localhost:8000/v1');
+                                } else if (pType === 'Ollama') {
+                                  setOnboardEndpointUrl('http://localhost:11434');
+                                  setOnboardModelId('llama3.2:latest');
+                                }
+                              }}
                             >
+                              <option value="Gemini">Google Gemini (Cloud)</option>
+                              <option value="Azure OpenAI">Azure OpenAI (Enterprise)</option>
+                              <option value="OpenAI">OpenAI Cloud</option>
                               <option value="vLLM">vLLM Engine</option>
                               <option value="Ollama">Ollama Local Engine</option>
-                              <option value="Cloud API">Cloud API (OpenAI/Anthropic)</option>
+                              <option value="Cloud API">Cloud API (Generic)</option>
                               <option value="OpenAI-Compatible">OpenAI-Compatible Gateway</option>
                             </select>
                           </div>
@@ -915,10 +942,13 @@ export const Settings = () => {
                               value={onboardModelId}
                             >
                               <option value="">-- Choose or Enter Custom Below --</option>
-                              <option value="llama3.2:latest">llama3.2:latest (Ollama)</option>
-                              <option value="ggozad/prometheus2">prometheus2 (Ragas Judge)</option>
-                              <option value="gpt-4o">gpt-4o (OpenAI Cloud)</option>
+                              <option value="gemini-2.0-flash">gemini-2.0-flash (Google Gemini)</option>
+                              <option value="gemini-1.5-flash">gemini-1.5-flash (Google Gemini)</option>
+                              <option value="gemini-1.5-pro">gemini-1.5-pro (Google Gemini)</option>
+                              <option value="gpt-4o">gpt-4o (OpenAI / Azure)</option>
+                              <option value="gpt-4o-mini">gpt-4o-mini (OpenAI / Azure)</option>
                               <option value="gpt-3.5-turbo">gpt-3.5-turbo (OpenAI Cloud)</option>
+                              <option value="llama3.2:latest">llama3.2:latest (Ollama)</option>
                               <option value="meta-llama/Meta-Llama-3-8B-Instruct">meta-llama/Meta-Llama-3-8B-Instruct (vLLM)</option>
                             </select>
                           </div>

@@ -116,9 +116,9 @@ const [activeTab, setActiveTab] = useState<string>('query');
   
   // Onboarding Form States
   const [onboardAlias, setOnboardAlias] = useState<string>('');
-  const [onboardProviderType, setOnboardProviderType] = useState<string>('vLLM');
-  const [onboardEndpointUrl, setOnboardEndpointUrl] = useState<string>('http://localhost:8000/v1');
-  const [onboardModelId, setOnboardModelId] = useState<string>('');
+  const [onboardProviderType, setOnboardProviderType] = useState<string>('Gemini');
+  const [onboardEndpointUrl, setOnboardEndpointUrl] = useState<string>('https://generativelanguage.googleapis.com/v1beta/openai');
+  const [onboardModelId, setOnboardModelId] = useState<string>('gemini-2.0-flash');
   const [onboardApiKey, setOnboardApiKey] = useState<string>('none');
   const [downstreamQdrantUrl, setDownstreamQdrantUrl] = useState<string>('');
   const [downstreamEmbeddingUrl, setDownstreamEmbeddingUrl] = useState<string>('');
