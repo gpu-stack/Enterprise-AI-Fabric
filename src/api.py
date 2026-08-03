@@ -345,14 +345,35 @@ def build_system_health_report() -> dict:
     llm_url = Config.LLM_API_BASE_URL
     l_start = time.perf_counter_ns()
     try:
+        import requests
+        api_key = Config.LLM_API_KEY
+        headers = {}
+        if api_key and api_key.lower() != "none":
+            headers["Authorization"] = f"Bearer {api_key}"
+            headers["api-key"] = api_key
+
+        models_url = f"{llm_url.rstrip('/')}/models"
+        if not llm_url.endswith("/v1") and "/v1/" not in llm_url and "generativelanguage.googleapis.com" not in llm_url and "openai.azure.com" not in llm_url:
+            models_url = f"{llm_url.rstrip('/')}/v1/models"
+
+        res = requests.get(models_url, headers=headers, timeout=2.5)
         l_lat = round((time.perf_counter_ns() - l_start) / 1_000_000.0, 2)
-        components["llm"] = {
-            "name": "LLM Engine",
-            "status": "HEALTHY",
-            "url": llm_url,
-            "latency_ms": l_lat,
-            "message": f"Active profile '{active_profile}' ({Config.DEFAULT_MODEL_ID})"
-        }
+        if res.status_code in [200, 401, 403]:
+            components["llm"] = {
+                "name": "LLM Engine",
+                "status": "HEALTHY",
+                "url": llm_url,
+                "latency_ms": l_lat,
+                "message": f"Active profile '{active_profile}' ({Config.DEFAULT_MODEL_ID})"
+            }
+        else:
+            components["llm"] = {
+                "name": "LLM Engine",
+                "status": "UNREACHABLE",
+                "url": llm_url,
+                "latency_ms": l_lat,
+                "message": f"Endpoint returned HTTP {res.status_code}"
+            }
     except Exception as e:
         l_lat = round((time.perf_counter_ns() - l_start) / 1_000_000.0, 2)
         components["llm"] = {
@@ -360,7 +381,7 @@ def build_system_health_report() -> dict:
             "status": "UNREACHABLE",
             "url": llm_url,
             "latency_ms": l_lat,
-            "message": f"LLM configuration error: {str(e)}"
+            "message": f"LLM configuration/network error: {str(e)}"
         }
 
     overall_unhealthy = any(c["status"] == "UNREACHABLE" for c in components.values())

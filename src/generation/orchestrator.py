@@ -887,7 +887,14 @@ class ContextOrchestrator:
                 token_metrics = res_data.get("usage", {})
                 yield {"type": "token", "content": response_text}
             except Exception as sync_err:
-                yield {"type": "error", "message": f"Inference engine rejection: {str(sync_err)}"}
+                err_str = str(sync_err)
+                if "404" in err_str:
+                    err_msg = f"LLM Endpoint or Model ID not found [HTTP 404]. Verify endpoint URL ('{vllm_endpoint}') and model ID ('{target_model}') in System Settings."
+                elif "401" in err_str or "403" in err_str:
+                    err_msg = f"LLM Authentication failed [{err_str}]. Check your API Key in System Settings."
+                else:
+                    err_msg = f"Inference engine rejection: {err_str}"
+                yield {"type": "error", "message": err_msg}
                 return
 
         total_e2e_sec = round((time.perf_counter_ns() - pre_start) / 1_000_000_000.0, 3)
