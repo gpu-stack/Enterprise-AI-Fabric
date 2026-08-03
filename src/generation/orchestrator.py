@@ -42,6 +42,9 @@ class ContextOrchestrator:
         base_url = (api_base_url or "").strip().rstrip('/')
         p_type = (provider_type or "").lower()
         
+        if "generativelanguage.googleapis.com" in base_url:
+            base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+
         if "/chat/completions" in base_url:
             vllm_endpoint = base_url
         elif "openai.azure.com" in base_url or "azure" in p_type:
