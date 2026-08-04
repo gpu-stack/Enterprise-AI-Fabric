@@ -56,4 +56,4 @@ services:
 networks:
   llm-infra-net:
     name: llm-infra-net
-    driver: bridge
+    external: true

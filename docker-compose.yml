@@ -37,3 +37,4 @@ services:
 networks:
   llm-infra-net:
     name: llm-infra-net
+    external: true

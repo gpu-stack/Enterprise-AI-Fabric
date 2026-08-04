@@ -19,6 +19,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - llm-infra-net
 
   # --- 2. TEI EMBEDDING ENGINE ---
   tei_embedding:
@@ -35,6 +37,8 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+    networks:
+      - llm-infra-net
 
   # --- 3. TEI CROSS-ENCODER RERANKER ENGINE ---
   tei_reranker:
@@ -51,9 +55,16 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+    networks:
+      - llm-infra-net
 
 volumes:
   qdrant_storage:
     driver: local
   hf_cache:
     driver: local
+
+networks:
+  llm-infra-net:
+    name: llm-infra-net
+    external: true

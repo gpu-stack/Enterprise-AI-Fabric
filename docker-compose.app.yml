@@ -1,9 +1,9 @@
 name: enterprise-ai-fabric
 
 networks:
-  rag_network:
-    driver: bridge
-    name: enterprise_ai_fabric_network
+  llm-infra-net:
+    name: llm-infra-net
+    external: true
 
 volumes:
   app_data:
@@ -24,7 +24,7 @@ services:
     ports:
       - "${REDIS_PORT:-63799}:6379"   # Overridable host port (default 63799 to prevent host 6379 conflicts)
     networks:
-      - rag_network
+      - llm-infra-net
     extra_hosts:
       - "host.docker.internal:host-gateway"
     dns:
@@ -72,7 +72,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
     networks:
-      - rag_network
+      - llm-infra-net
     extra_hosts:
       - "host.docker.internal:host-gateway"
     dns:
@@ -122,7 +122,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
     networks:
-      - rag_network
+      - llm-infra-net
     extra_hosts:
       - "host.docker.internal:host-gateway"
     dns:
