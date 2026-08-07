@@ -1,6 +1,8 @@
-# ✂️ Semantic Chunking & Vectorization Engine (`semantic_splitter.py`)
+# ✂️ Semantic Chunking & Dual Vectorization Engine (`semantic_splitter.py`)
 
-The **Semantic Chunking Engine** converts raw extracted Markdown streams into context-preserved, hierarchy-aware text blocks (Parent & Child chunks) and vectorizes them using a decoupled Text Embeddings Inference (TEI) server container.
+[← Back to main README](../../README.md) | [🔍 Hybrid Search Documentation](../../HYBRID_SEARCH.md)
+
+The **Semantic Chunking Engine** converts raw extracted Markdown streams into context-preserved, hierarchy-aware text blocks (Parent & Child chunks) and vectorizes each child chunk **twice** — once as a dense embedding via a decoupled Text Embeddings Inference (TEI) server, and once as a sparse BM25 vector via FastEmbed — for downstream Hybrid Search Fusion.
 
 ---
 
@@ -14,6 +16,7 @@ The **Semantic Chunking Engine** converts raw extracted Markdown streams into co
 * Enforces **Markdown Table Protection**: Ensures financial balance sheets and data tables are never fragmented across chunk boundaries.
 * Computes exact token metrics using `tiktoken` (`cl100k_base` encoding).
 * Dispatches text arrays to the **TEI Rust Embedding Container** (`BAAI/bge-large-en-v1.5`) in safe 16-element sub-batches with exponential retry backoff.
+* Generates a matching **sparse BM25 vector** for every child chunk via `SparseBM25Encoder` (FastEmbed, `Qdrant/bm25`), so each chunk lands in Qdrant with both `dense` and `sparse` named vectors.
 
 ### Why We Built It This Way
 Traditional fixed-character chunkers (e.g. splitting every 500 characters with 50 overlap) suffer from severe flaws:
@@ -52,13 +55,15 @@ flowchart TD
     
     TagChild --> BatchEmbedder[TEI Embedding Client Wrapper]
     
-    subgraph Vectorization ["3. Decoupled TEI Vector Embedding (1024-dim)"]
+    subgraph Vectorization ["3. Decoupled Dual Vectorization (Dense + Sparse)"]
         BatchEmbedder --> PartitionBatch[Partition Chunks into Sub-Batches of 16]
         PartitionBatch --> TEI_API[POST /embed to TEI Container<br>BAAI/bge-large-en-v1.5]
         TEI_API -- Retry on HTTP 429/503 --> VectorList[1024-Dimensional Dense Vectors]
+        TagChild --> SparseEncoder[SparseBM25Encoder.embed_documents<br>FastEmbed Qdrant/bm25]
+        SparseEncoder --> SparseList[Sparse Indices & Values Vectors]
     end
     
-    VectorList --> QdrantPoints[Construct Qdrant PointStruct Objects<br>Payload + Vector + UUIDv5]
+    VectorList & SparseList --> QdrantPoints[Construct Qdrant PointStruct Objects<br>Payload + Dense Vector + Sparse Vector + UUIDv5]
 ```
 
 ---
