@@ -1,5 +1,7 @@
 # 📄 Document Parsing Engine (`layout_parser.py`)
 
+[← Back to main README](../../README.md)
+
 The **Document Parsing Engine** is responsible for transforming raw, high-density unstructured documents (PDFs, Excel Workbooks, CSV files) into visually aware, structured Markdown streams while maintaining spatial context, table geometry, and multimodal image descriptions.
 
 ---
