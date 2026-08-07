@@ -1,6 +1,8 @@
 # 🔄 Ingestion Pipeline, Deduplication & Version Lineage Engine (`ingest_pipeline.py`)
 
-The **Tenant Ingestion Pipeline** coordinates document parsing, semantic chunking, embedding generation, deterministic chunk deduplication, document revision lineage deprecation, and upsertion into the Qdrant vector database under strict logical tenant isolation.
+[← Back to main README](../../README.md) | [🔍 Hybrid Search Documentation](../../HYBRID_SEARCH.md)
+
+The **Tenant Ingestion Pipeline** coordinates document parsing, semantic chunking, dual dense+sparse embedding generation, deterministic chunk deduplication, document revision lineage deprecation, and upsertion into the Qdrant vector database under strict logical tenant isolation.
 
 ---
 
